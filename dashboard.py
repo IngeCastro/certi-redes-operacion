@@ -203,7 +203,7 @@ with tab2:
                 if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
                 return ''
 
-            st.dataframe(df_ans_disp.style.applymap(style_ans, subset=['Estado']), use_container_width=True, hide_index=True)
+            st.dataframe(df_ans_disp.style.map(style_ans, subset=['Estado']), use_container_width=True, hide_index=True)
             
             # Gráfico de eficiencia
             fig_ans = px.bar(df_ans, x="inspector", color="Estado ANS", title="Cumplimiento de ANS por Inspector",
