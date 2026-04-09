@@ -103,28 +103,40 @@ if subida_godo is not None:
             else:
                 df_ejec = pd.read_excel(subida_godo, dtype=str)
             
-            df_ejec.columns = df_ejec.columns.str.strip().str.upper()
-            if 'CONTRATO' in df_ejec.columns and 'ESTADO' in df_ejec.columns:
-                df_ejec['CONTRATO'] = df_ejec['CONTRATO'].astype(str).str.split('.').str[0].str.strip()
+            # Limpieza exhaustiva de nombres de columnas
+            df_ejec.rename(columns=lambda x: str(x).strip().upper(), inplace=True)
+            
+            # Verificamos que existan las columnas clave (manejando posibles variaciones sutiles)
+            col_contrato = next((col for col in df_ejec.columns if 'CONTRATO' in col), None)
+            col_estado = next((col for col in df_ejec.columns if 'ESTADO' in col), None)
+
+            if col_contrato and col_estado:
+                df_ejec[col_contrato] = df_ejec[col_contrato].astype(str).str.split('.').str[0].str.strip()
                 
                 # Función mejorada para atrapar espacios extra en el estado de GoDoWorks
                 def mapear_ejecucion(e):
                     e = str(e).strip().upper()
-                    if e in ["CERTIFICADO", "NO CERTIFICADO", "EJECUTADA(CUMPLE)", "EJECUTADA (CUMPLE)", "EJECUTADA"]: return "✅ Cumplidas"
-                    if e in ["VISITA NO EFECTIVA", "NO EFECTIVA"]: return "❌ No efectiva"
+                    if any(val in e for val in ["CERTIFICADO", "NO CERTIFICADO", "EJECUTADA(CUMPLE)", "EJECUTADA (CUMPLE)", "EJECUTADA"]): 
+                        return "✅ Cumplidas"
+                    if any(val in e for val in ["VISITA NO EFECTIVA", "NO EFECTIVA"]): 
+                        return "❌ No efectiva"
                     return "! Pendiente"
                 
-                df_ejec['estado_final'] = df_ejec['ESTADO'].apply(mapear_ejecucion)
-                df_nueva = df_ejec[['CONTRATO', 'ESTADO', 'estado_final']]
+                df_ejec['estado_final'] = df_ejec[col_estado].apply(mapear_ejecucion)
+                df_nueva = df_ejec[[col_contrato, col_estado, 'estado_final']].rename(columns={col_contrato: 'CONTRATO', col_estado: 'ESTADO'})
                 
                 if os.path.exists(archivo_bd_ejecucion):
                     df_hist = pd.read_csv(archivo_bd_ejecucion, dtype=str)
                     df_act = pd.concat([df_hist, df_nueva]).drop_duplicates(subset=['CONTRATO'], keep='last')
-                else: df_act = df_nueva
+                else: 
+                    df_act = df_nueva
                 
                 df_act.to_csv(archivo_bd_ejecucion, index=False, encoding='utf-8-sig')
                 st.session_state.ultimo_archivo_ejec = file_id
-        except Exception as e: st.error(f"Error procesando GoDoWorks: {e}")
+            else:
+                st.sidebar.error("No se encontraron las columnas 'CONTRATO' o 'ESTADO' en el archivo.")
+        except Exception as e: 
+            st.sidebar.error(f"Error procesando GoDoWorks: {e}")
 
 # --- LOGS WHATSAPP ---
 logs = []
@@ -224,7 +236,6 @@ with tab1:
             if 'CONFIRM' in str(row['WhatsApp']).upper(): styles[row.index.get_loc('WhatsApp')] = 'color: #2e7d32; font-weight: bold;'
             return styles
 
-        # ESTA ES LA LÍNEA QUE SE CORRIGIÓ: de .map a .apply
         st.dataframe(df_op_disp.style.apply(style_op, axis=1), use_container_width=True, hide_index=True)
     else:
         st.info("Cargue la agenda en la izquierda.")
