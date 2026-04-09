@@ -1,0 +1,6 @@
+streamlit
+pandas
+Pillow
+plotly
+twilio
+openpyxl
