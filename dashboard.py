@@ -224,7 +224,8 @@ with tab1:
             if 'CONFIRM' in str(row['WhatsApp']).upper(): styles[row.index.get_loc('WhatsApp')] = 'color: #2e7d32; font-weight: bold;'
             return styles
 
-        st.dataframe(df_op_disp.style.map(style_op, axis=1), use_container_width=True, hide_index=True)
+        # ESTA ES LA LÍNEA QUE SE CORRIGIÓ: de .map a .apply
+        st.dataframe(df_op_disp.style.apply(style_op, axis=1), use_container_width=True, hide_index=True)
     else:
         st.info("Cargue la agenda en la izquierda.")
 
