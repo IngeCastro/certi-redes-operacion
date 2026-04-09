@@ -34,6 +34,16 @@ NUMERO_TWILIO = 'whatsapp:+15559416718'
 if 'ultimo_archivo_ejec' not in st.session_state:
     st.session_state.ultimo_archivo_ejec = None
 
+# Memoria de estado para los botones laterales
+if 'filtro_rapido_tipo' not in st.session_state:
+    st.session_state.filtro_rapido_tipo = None
+if 'filtro_rapido_valor' not in st.session_state:
+    st.session_state.filtro_rapido_valor = None
+
+def aplicar_filtro_rapido(tipo, valor):
+    st.session_state.filtro_rapido_tipo = tipo
+    st.session_state.filtro_rapido_valor = valor
+
 # ==========================================
 # 2. CARGA DE DATOS (BARRA LATERAL)
 # ==========================================
@@ -58,8 +68,7 @@ try:
     df_agenda['fecha_dt'] = pd.to_datetime(df_agenda['fecha'], dayfirst=True, errors='coerce')
     df_agenda['fecha_prog'] = df_agenda['fecha_dt'].dt.strftime('%d/%m/%Y')
     
-    # ✨ FECHA DE ASIGNACIÓN (Para ANS)
-    # Buscamos la columna de asignación, si no existe usamos la fecha del contrato
+    # FECHA DE ASIGNACIÓN (Para ANS)
     col_asig = 'fecha asignacion' if 'fecha asignacion' in df_agenda.columns else 'fecha'
     df_agenda['fecha_asig_dt'] = pd.to_datetime(df_agenda[col_asig], dayfirst=True, errors='coerce')
     
@@ -105,6 +114,28 @@ if not df_agenda.empty:
         df_dashboard['estado_ejecucion'] = df_dashboard['estado_final'].fillna('! Pendiente')
     else:
         df_dashboard['estado_ejecucion'] = '! Pendiente'
+        
+    # ✨ BOTONES DE FILTRO RÁPIDO RESTAURADOS ✨
+    with st.sidebar:
+        st.markdown("---")
+        st.markdown("### 💬 RESUMEN WHATSAPP")
+        c_conf = len(df_dashboard[df_dashboard['estado_visita'] == 'CONFIRMÓ'])
+        c_canc = len(df_dashboard[df_dashboard['estado_visita'] == 'CANCELÓ'])
+        c_all = len(df_dashboard)
+
+        st.button(f"✅ Confirmados: {c_conf}", on_click=aplicar_filtro_rapido, args=('whatsapp', 'CONFIRMÓ'), use_container_width=True)
+        st.button(f"❌ Cancelados: {c_canc}", on_click=aplicar_filtro_rapido, args=('whatsapp', 'CANCELÓ'), use_container_width=True)
+        st.button(f"📋 Ver Todos: {c_all}", on_click=aplicar_filtro_rapido, args=(None, None), use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("### 🛠️ RESUMEN EJECUCIÓN")
+        e_cump = len(df_dashboard[df_dashboard['estado_ejecucion'] == '✅ Cumplidas'])
+        e_noef = len(df_dashboard[df_dashboard['estado_ejecucion'] == '❌ No efectiva'])
+        e_pend = len(df_dashboard[df_dashboard['estado_ejecucion'] == '! Pendiente'])
+
+        st.button(f"✅ Cumplidas: {e_cump}", on_click=aplicar_filtro_rapido, args=('ejecucion', '✅ Cumplidas'), use_container_width=True)
+        st.button(f"❌ No Efectivas: {e_noef}", on_click=aplicar_filtro_rapido, args=('ejecucion', '❌ No efectiva'), use_container_width=True)
+        st.button(f"❗ Pendientes: {e_pend}", on_click=aplicar_filtro_rapido, args=('ejecucion', '! Pendiente'), use_container_width=True)
 else:
     df_dashboard = pd.DataFrame()
 
@@ -127,10 +158,20 @@ with tab1:
         with c4: jor = st.selectbox("⏰ Jornada", ["Todas", "AM", "PM"], key="jor_op")
 
         df_fil = df_dashboard.copy()
+        
+        # Filtros de listas desplegables
         if muni != "Todos": df_fil = df_fil[df_fil['ciudad'] == muni]
         if insp != "Todos": df_fil = df_fil[df_fil['inspector'] == insp]
         if est_e != "Todos": df_fil = df_fil[df_fil['estado_ejecucion'] == est_e]
         if jor != "Todas": df_fil = df_fil[df_fil['jornada'] == jor]
+
+        # ✨ Aplicar Filtros Rápidos de los Botones
+        if st.session_state.filtro_rapido_tipo == 'whatsapp':
+            df_fil = df_fil[df_fil['estado_visita'] == st.session_state.filtro_rapido_valor]
+            st.info(f"💡 Mostrando solo: **{st.session_state.filtro_rapido_valor}** (WhatsApp). Haga clic en '📋 Ver Todos' en la barra lateral para quitar el filtro.")
+        elif st.session_state.filtro_rapido_tipo == 'ejecucion':
+            df_fil = df_fil[df_fil['estado_ejecucion'] == st.session_state.filtro_rapido_valor]
+            st.info(f"💡 Mostrando solo: **{st.session_state.filtro_rapido_valor}** (Ejecución). Haga clic en '📋 Ver Todos' en la barra lateral para quitar el filtro.")
 
         st.markdown("---")
         st.write(f"#### 📋 Detalle de Órdenes ({len(df_fil)} registros)")
@@ -222,11 +263,15 @@ with st.sidebar:
     st.markdown("### 🛠️ ACTUALIZAR GODO")
     subida_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"], key="godo_asig")
     if subida_godo:
-        # (Lógica de procesado igual a la anterior para mantener sincronía)
-        pass
+        pass # La lógica de guardado está en la parte superior del código para mantener el cruce correcto
 
     if not df_dashboard.empty:
         st.markdown("---")
         if st.button("📦 Finalizar y Archivar", type="primary", use_container_width=True):
-            # (Lógica de archivado igual a la anterior)
-            pass
+            df_cerrar = df_dashboard[df_dashboard['estado_ejecucion'].isin(['✅ Cumplidas', '❌ No efectiva'])]
+            if not df_cerrar.empty:
+                nuevos = df_cerrar[['contrato']]
+                if os.path.exists('contratos_archivados.csv'): nuevos.to_csv('contratos_archivados.csv', mode='a', header=False, index=False)
+                else: nuevos.to_csv('contratos_archivados.csv', index=False)
+                st.success("Corte realizado con éxito.")
+                st.rerun()
