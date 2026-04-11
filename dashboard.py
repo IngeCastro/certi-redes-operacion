@@ -3,314 +3,446 @@ import pandas as pd
 from PIL import Image
 import io
 import plotly.express as px  
-import json
-from twilio.rest import Client
 import datetime
 import os
 
 # ==========================================
-# 0. CONFIGURACIÓN DE REGLAS ANS (TIEMPOS)
-# ==========================================
-REGLAS_ANS = {
-    'REVISION PERIODICA': 48, # horas
-    'CERTIFICACION': 72,
-    'RECONEXION': 24,
-    'SUSPENSION': 24,
-    'POR DEFECTO': 48
-}
-
-# ==========================================
-# 1. CONFIGURACIÓN MAESTRA
+# 0. CONSTANTES Y CONFIGURACIÓN
 # ==========================================
 st.set_page_config(layout="wide", page_title="Panel Certi-Redes", page_icon="✅")
 
-# Credenciales de Twilio
-ACCOUNT_SID = 'ACe411b7d301357600771550712214d873'
-AUTH_TOKEN = 'dbd33bde262bb08538309c92676c697a' 
-CONTENT_SID = 'HX8a0789521437fb76f489c025a2be5513'
-NUMERO_TWILIO = 'whatsapp:+15559416718' 
-
-if 'ultimo_archivo_ejec' not in st.session_state:
-    st.session_state.ultimo_archivo_ejec = None
-
-# Memoria de estado para los botones laterales
-if 'filtro_rapido_tipo' not in st.session_state:
-    st.session_state.filtro_rapido_tipo = None
-if 'filtro_rapido_valor' not in st.session_state:
-    st.session_state.filtro_rapido_valor = None
-
-def aplicar_filtro_rapido(tipo, valor):
-    st.session_state.filtro_rapido_tipo = tipo
-    st.session_state.filtro_rapido_valor = valor
+ARCHIVO_BASE = 'base_general.csv'
+ARCHIVO_HISTORIAL = 'historial_certiredes.csv'
+ARCHIVO_LOG_WA = 'log_certiredes.txt'
 
 # ==========================================
-# 2. CARGA DE ARCHIVOS (AGENDA Y GODO)
+# 1. FUNCIONES DEL MOTOR DE DATOS
+# ==========================================
+
+def normalizar_columnas(df):
+    """Limpia y estandariza los nombres de las columnas para evitar errores de espacios."""
+    df.columns = df.columns.astype(str).str.strip().str.lower()
+    # Mapeo de seguridad por si cambian ligeramente los nombres
+    mapeo = {
+        'orden': 'orden', 'contrato': 'contrato', 'nombre': 'nombre', 
+        'dirección': 'direccion', 'direccion': 'direccion', 'telefono': 'telefono',
+        'fecha programación': 'fecha_programacion', 'fecha programacion': 'fecha_programacion',
+        'jornada': 'jornada', 'tipo orden': 'tipo_orden', 'tipo trabajo': 'tipo_orden', 
+        'fecha asignación': 'fecha_asignacion', 'fecha asignacion': 'fecha_asignacion', 
+        '# vne': 'num_vne', 'consumo': 'consumo', 'meses': 'meses',
+        'cabecera': 'municipio', 'cabeceras': 'municipio'
+    }
+    df.rename(columns=mapeo, inplace=True)
+    return df
+
+def procesar_nuevas_bases(archivos_subidos):
+    """Lee los Excels subidos, extrae la pestaña Coordinación y actualiza la base general."""
+    nuevos_registros = []
+    
+    for archivo in archivos_subidos:
+        try:
+            # Leer pestaña Coordinación, fila 5 como cabecera (header=4 en índice base 0)
+            df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+            df_temp = normalizar_columnas(df_temp)
+            
+            # Limpiar formatos base
+            if 'orden' in df_temp.columns and 'contrato' in df_temp.columns:
+                df_temp['orden'] = df_temp['orden'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                df_temp['contrato'] = df_temp['contrato'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                df_temp = df_temp[df_temp['orden'] != 'nan'] # Eliminar filas vacías
+                nuevos_registros.append(df_temp)
+        except Exception as e:
+            st.error(f"Error al procesar el archivo {archivo.name}. Verifique que tenga la pestaña 'Coordinación' y cabeceras en la fila 5. Detalle: {e}")
+
+    if nuevos_registros:
+        df_nuevos = pd.concat(nuevos_registros, ignore_index=True)
+        
+        # Formatear fechas estandarizadas al formato universal (YYYY-MM-DD) para evitar cruces
+        if 'fecha_programacion' in df_nuevos.columns:
+            df_nuevos['fecha_prog_limpia'] = pd.to_datetime(df_nuevos['fecha_programacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+        if 'fecha_asignacion' in df_nuevos.columns:
+            df_nuevos['fecha_asignacion'] = pd.to_datetime(df_nuevos['fecha_asignacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+            
+        # Inicializar columnas operativas si no existen
+        for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne']:
+            if col not in df_nuevos.columns:
+                df_nuevos[col] = 0 if col == 'num_vne' else 'Pendiente'
+        
+        # Limpiar columna Meses de decimales por seguridad
+        if 'meses' in df_nuevos.columns:
+            df_nuevos['meses'] = df_nuevos['meses'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                
+        # Cargar base existente o crearla
+        if os.path.exists(ARCHIVO_BASE):
+            df_base = pd.read_csv(ARCHIVO_BASE, dtype=str)
+            df_consolidado = pd.concat([df_base, df_nuevos]).drop_duplicates(subset=['orden'], keep='last')
+        else:
+            df_consolidado = df_nuevos
+            
+        df_consolidado.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
+        return True
+    return False
+
+def procesar_godoworks(archivo_godo):
+    """Procesa el CSV de GoDoWorks, archiva cumplidas y suma VNE."""
+    try:
+        if archivo_godo.name.lower().endswith('.csv'):
+            contenido = archivo_godo.getvalue().decode('utf-8-sig', errors='replace')
+            sep = ';' if ';' in contenido.split('\n')[0] else ','
+            df_godo = pd.read_csv(io.StringIO(contenido), sep=sep, dtype=str)
+        else:
+            df_godo = pd.read_excel(archivo_godo, dtype=str)
+            
+        df_godo.columns = df_godo.columns.astype(str).str.strip().str.upper()
+        col_contrato = next((col for col in df_godo.columns if 'CONTRATO' in col), None)
+        col_estado = next((col for col in df_godo.columns if 'ESTADO' in col), None)
+
+        if not col_contrato or not col_estado:
+            st.error("El archivo GoDoWorks no tiene columnas CONTRATO o ESTADO.")
+            return False
+
+        df_godo[col_contrato] = df_godo[col_contrato].astype(str).str.replace('.0', '', regex=False).str.strip()
+        
+        if not os.path.exists(ARCHIVO_BASE):
+            st.warning("No hay una Base General activa para actualizar.")
+            return False
+            
+        df_base = pd.read_csv(ARCHIVO_BASE, dtype=str)
+        df_historial = pd.read_csv(ARCHIVO_HISTORIAL, dtype=str) if os.path.exists(ARCHIVO_HISTORIAL) else pd.DataFrame()
+        
+        ordenes_a_archivar = []
+        
+        for _, row_godo in df_godo.iterrows():
+            contrato = row_godo[col_contrato]
+            estado = str(row_godo[col_estado]).strip().upper()
+            
+            mask = df_base['contrato'] == contrato
+            if mask.any():
+                if any(val in estado for val in ["CERTIFICADO", "NO CERTIFICADO", "EJECUTADA"]): 
+                    ordenes_a_archivar.extend(df_base.loc[mask, 'orden'].tolist())
+                elif any(val in estado for val in ["VISITA NO EFECTIVA", "NO EFECTIVA"]):
+                    df_base.loc[mask, 'num_vne'] = pd.to_numeric(df_base.loc[mask, 'num_vne'], errors='coerce').fillna(0) + 1
+                    df_base.loc[mask, 'estado_ejecucion'] = '❌ No efectiva'
+
+        if ordenes_a_archivar:
+            df_cumplidas = df_base[df_base['orden'].isin(ordenes_a_archivar)].copy()
+            df_cumplidas['estado_ejecucion'] = '✅ Cumplida (Archivada)'
+            df_historial = pd.concat([df_historial, df_cumplidas], ignore_index=True)
+            df_historial.to_csv(ARCHIVO_HISTORIAL, index=False, encoding='utf-8-sig')
+            
+            df_base = df_base[~df_base['orden'].isin(ordenes_a_archivar)]
+
+        df_base.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
+        return True
+    except Exception as e:
+        st.error(f"Error procesando GoDoWorks: {e}")
+        return False
+
+# ==========================================
+# 2. BARRA LATERAL (MENÚ DE CARGA)
 # ==========================================
 with st.sidebar:
-    try:
-        st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
-    except:
-        st.write("### CERTI-REDES S.A.S")
+    try: st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
+    except: st.write("### CERTI-REDES S.A.S")
     
     st.markdown("---")
-    st.markdown("### 📂 1. CARGAR AGENDA")
-    subida_agenda = st.file_uploader("Subir Agenda (.xlsm / .xlsx)", type=["xlsm", "xlsx"])
+    st.markdown("### 📥 1. ALIMENTAR BASE GENERAL")
+    st.info("Suba uno o varios archivos de Excel. El sistema buscará la hoja 'Coordinación' a partir de la fila 5.")
+    archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx)", type=["xlsm", "xlsx"], accept_multiple_files=True)
+    if archivos_bases and st.button("🚀 Procesar Bases de Datos", use_container_width=True):
+        if procesar_nuevas_bases(archivos_bases):
+            st.success("¡Base General actualizada correctamente!")
+            st.rerun()
 
     st.markdown("---")
-    st.markdown("### 🛠️ 2. ACTUALIZAR GODO")
-    subida_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"], key="godo_asig")
+    st.markdown("### 🛠️ 2. ACTUALIZAR EJECUCIÓN (GoDoWorks)")
+    st.info("Sube el archivo de GoDoWorks. Las órdenes 'Cumplidas' irán al Historial y las 'No Efectivas' sumarán VNE.")
+    archivo_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"])
+    if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", use_container_width=True):
+        if procesar_godoworks(archivo_godo):
+            st.success("¡Cruce realizado! Órdenes actualizadas y/o archivadas.")
+            st.rerun()
 
-# --- PROCESAR AGENDA ---
-df_agenda = pd.DataFrame()
-try:
-    fuente_agenda = subida_agenda if subida_agenda is not None else 'agenda.xlsm'
-    df_agenda = pd.read_excel(fuente_agenda, sheet_name='base', engine='openpyxl')
-    df_agenda.columns = df_agenda.columns.str.strip().str.lower()
-    df_agenda['contrato'] = df_agenda['contrato'].astype(str).str.split('.').str[0].str.strip()
-    
-    df_agenda['fecha_dt'] = pd.to_datetime(df_agenda['fecha'], dayfirst=True, errors='coerce')
-    df_agenda['fecha_prog'] = df_agenda['fecha_dt'].dt.strftime('%d/%m/%Y')
-    
-    col_asig = 'fecha asignacion' if 'fecha asignacion' in df_agenda.columns else 'fecha'
-    df_agenda['fecha_asig_dt'] = pd.to_datetime(df_agenda[col_asig], dayfirst=True, errors='coerce')
-    
-    df_agenda['hora'] = df_agenda['hora'].fillna('Sin hora').astype(str).str.strip().str.upper()
-    def sacar_jornada(h):
-        if 'AM' in h or 'A.M' in h: return 'AM'
-        if 'PM' in h or 'P.M' in h: return 'PM'
-        try:
-            hr = int(str(h).split(':')[0])
-            return 'PM' if (hr >= 12 and hr != 24) else 'AM'
-        except: return 'Sin Jornada'
-    df_agenda['jornada'] = df_agenda['hora'].apply(sacar_jornada)
-
-    if os.path.exists('contratos_archivados.csv'):
-        df_archivados = pd.read_csv('contratos_archivados.csv', dtype=str)
-        df_agenda = df_agenda[~df_agenda['contrato'].isin(df_archivados['contrato'])]
-except Exception as e:
-    st.sidebar.error(f"Esperando carga de Agenda...")
-
-# --- PROCESAR GODO (EJECUCIÓN) ---
-archivo_bd_ejecucion = 'bd_ejecucion.csv'
-if subida_godo is not None:
-    file_id = subida_godo.name + str(subida_godo.size)
-    if st.session_state.ultimo_archivo_ejec != file_id:
-        try:
-            if subida_godo.name.lower().endswith('.csv'):
-                contenido = subida_godo.getvalue().decode('utf-8-sig', errors='replace')
-                sep = ';' if ';' in contenido.split('\n')[0] else ','
-                df_ejec = pd.read_csv(io.StringIO(contenido), sep=sep, dtype=str)
-            else:
-                df_ejec = pd.read_excel(subida_godo, dtype=str)
-            
-            # Limpieza exhaustiva de nombres de columnas
-            df_ejec.rename(columns=lambda x: str(x).strip().upper(), inplace=True)
-            
-            # Verificamos que existan las columnas clave (manejando posibles variaciones sutiles)
-            col_contrato = next((col for col in df_ejec.columns if 'CONTRATO' in col), None)
-            col_estado = next((col for col in df_ejec.columns if 'ESTADO' in col), None)
-
-            if col_contrato and col_estado:
-                df_ejec[col_contrato] = df_ejec[col_contrato].astype(str).str.split('.').str[0].str.strip()
-                
-                # Función mejorada para atrapar espacios extra en el estado de GoDoWorks
-                def mapear_ejecucion(e):
-                    e = str(e).strip().upper()
-                    if any(val in e for val in ["CERTIFICADO", "NO CERTIFICADO", "EJECUTADA(CUMPLE)", "EJECUTADA (CUMPLE)", "EJECUTADA"]): 
-                        return "✅ Cumplidas"
-                    if any(val in e for val in ["VISITA NO EFECTIVA", "NO EFECTIVA"]): 
-                        return "❌ No efectiva"
-                    return "! Pendiente"
-                
-                df_ejec['estado_final'] = df_ejec[col_estado].apply(mapear_ejecucion)
-                df_nueva = df_ejec[[col_contrato, col_estado, 'estado_final']].rename(columns={col_contrato: 'CONTRATO', col_estado: 'ESTADO'})
-                
-                if os.path.exists(archivo_bd_ejecucion):
-                    df_hist = pd.read_csv(archivo_bd_ejecucion, dtype=str)
-                    df_act = pd.concat([df_hist, df_nueva]).drop_duplicates(subset=['CONTRATO'], keep='last')
-                else: 
-                    df_act = df_nueva
-                
-                df_act.to_csv(archivo_bd_ejecucion, index=False, encoding='utf-8-sig')
-                st.session_state.ultimo_archivo_ejec = file_id
-            else:
-                st.sidebar.error("No se encontraron las columnas 'CONTRATO' o 'ESTADO' en el archivo.")
-        except Exception as e: 
-            st.sidebar.error(f"Error procesando GoDoWorks: {e}")
-
-# --- LOGS WHATSAPP ---
-logs = []
-if os.path.exists('log_certiredes.txt'):
-    try:
-        with open('log_certiredes.txt', 'r', encoding='latin-1', errors='ignore') as f:
-            for linea in f:
-                if " - Contrato: " in linea:
-                    p1, resto = linea.split(" - Contrato: ")
-                    contrato_ex, _ = resto.split(" - Inspector: ")
-                    logs.append({"estado_visita": "CONFIRMÓ" if "CONFIRM" in p1.upper() else "CANCELÓ", "contrato": contrato_ex.strip()})
-    except: pass
-df_logs = pd.DataFrame(logs).drop_duplicates(subset=['contrato'], keep='last') if logs else pd.DataFrame(columns=["estado_visita", "contrato"])
+# Cargar Base Activa a memoria para la visualización
+df_activa = pd.DataFrame()
+if os.path.exists(ARCHIVO_BASE):
+    df_activa = pd.read_csv(ARCHIVO_BASE, dtype=str)
+    # Rellenar columnas si el CSV antiguo no las tenía
+    if 'consumo' not in df_activa.columns: df_activa['consumo'] = 'N/A'
+    if 'meses' not in df_activa.columns: df_activa['meses'] = 'N/A'
+    if 'tipo_orden' not in df_activa.columns: df_activa['tipo_orden'] = 'POR DEFECTO'
+    if 'municipio' not in df_activa.columns: df_activa['municipio'] = 'SIN DEFINIR'
 
 # ==========================================
-# 3. CRUCE FINAL Y BOTONES LATERALES
+# 3. INTERFAZ PRINCIPAL (PESTAÑAS)
 # ==========================================
-if not df_agenda.empty:
-    df_dashboard = pd.merge(df_agenda, df_logs, on='contrato', how='left')
-    df_dashboard['estado_visita'] = df_dashboard['estado_visita'].fillna('⏳ Esperando')
-    
-    if os.path.exists(archivo_bd_ejecucion):
-        df_bd = pd.read_csv(archivo_bd_ejecucion, dtype=str)
-        df_dashboard = pd.merge(df_dashboard, df_bd[['CONTRATO', 'estado_final']], left_on='contrato', right_on='CONTRATO', how='left')
-        df_dashboard['estado_ejecucion'] = df_dashboard['estado_final'].fillna('! Pendiente')
-    else:
-        df_dashboard['estado_ejecucion'] = '! Pendiente'
-        
-    # BOTONES DE FILTRO RÁPIDO
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 💬 3. RESUMEN WHATSAPP")
-        c_conf = len(df_dashboard[df_dashboard['estado_visita'] == 'CONFIRMÓ'])
-        c_canc = len(df_dashboard[df_dashboard['estado_visita'] == 'CANCELÓ'])
-        c_all = len(df_dashboard)
 
-        st.button(f"✅ Confirmados: {c_conf}", on_click=aplicar_filtro_rapido, args=('whatsapp', 'CONFIRMÓ'), use_container_width=True)
-        st.button(f"❌ Cancelados: {c_canc}", on_click=aplicar_filtro_rapido, args=('whatsapp', 'CANCELÓ'), use_container_width=True)
-        st.button(f"📋 Ver Todos: {c_all}", on_click=aplicar_filtro_rapido, args=(None, None), use_container_width=True)
+st.title("🚀 Panel de Control Operativo - Certi-Redes")
 
-        st.markdown("---")
-        st.markdown("### 🛠️ 4. RESUMEN EJECUCIÓN")
-        e_cump = len(df_dashboard[df_dashboard['estado_ejecucion'] == '✅ Cumplidas'])
-        e_noef = len(df_dashboard[df_dashboard['estado_ejecucion'] == '❌ No efectiva'])
-        e_pend = len(df_dashboard[df_dashboard['estado_ejecucion'] == '! Pendiente'])
-
-        st.button(f"✅ Cumplidas: {e_cump}", on_click=aplicar_filtro_rapido, args=('ejecucion', '✅ Cumplidas'), use_container_width=True)
-        st.button(f"❌ No Efectivas: {e_noef}", on_click=aplicar_filtro_rapido, args=('ejecucion', '❌ No efectiva'), use_container_width=True)
-        st.button(f"❗ Pendientes: {e_pend}", on_click=aplicar_filtro_rapido, args=('ejecucion', '! Pendiente'), use_container_width=True)
+if df_activa.empty:
+    st.warning("⚠️ La Base General está vacía. Por favor, cargue los archivos de Excel en el panel lateral para iniciar.")
 else:
-    df_dashboard = pd.DataFrame()
+    tab_wa, tab_op, tab_ans, tab_hist = st.tabs([
+        "💬 1. Módulo WhatsApp (Agenda)", 
+        "📊 2. Monitor Operativo", 
+        "⏱️ 3. Auditoría de Tiempos (ANS)",
+        "📦 4. Historial Archivadas"
+    ])
 
-# ==========================================
-# 4. INTERFAZ DE PESTAÑAS (TABS)
-# ==========================================
-st.title("🚀 Certi-Redes: Control Integral de Operación")
-
-tab1, tab2 = st.tabs(["📊 Operación Diaria", "⏱️ Auditoría de Tiempos (ANS)"])
-
-# ------------------------------------------
-# TAB 1: OPERACIÓN DIARIA
-# ------------------------------------------
-with tab1:
-    if not df_dashboard.empty:
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: muni = st.selectbox("📍 Municipio", ["Todos"] + list(df_dashboard['ciudad'].unique()), key="muni_op")
-        with c2: insp = st.selectbox("👷 Inspector", ["Todos"] + list(df_dashboard['inspector'].unique()), key="insp_op")
-        with c3: est_e = st.selectbox("🛠️ Ejecución", ["Todos", "✅ Cumplidas", "❌ No efectiva", "! Pendiente"], key="ejec_op")
-        with c4: jor = st.selectbox("⏰ Jornada", ["Todas", "AM", "PM"], key="jor_op")
-
-        df_fil = df_dashboard.copy()
-        
-        # Filtros de listas desplegables
-        if muni != "Todos": df_fil = df_fil[df_fil['ciudad'] == muni]
-        if insp != "Todos": df_fil = df_fil[df_fil['inspector'] == insp]
-        if est_e != "Todos": df_fil = df_fil[df_fil['estado_ejecucion'] == est_e]
-        if jor != "Todas": df_fil = df_fil[df_fil['jornada'] == jor]
-
-        # Aplicar Filtros Rápidos
-        if st.session_state.filtro_rapido_tipo == 'whatsapp':
-            df_fil = df_fil[df_fil['estado_visita'] == st.session_state.filtro_rapido_valor]
-            st.info(f"💡 Mostrando solo: **{st.session_state.filtro_rapido_valor}** (WhatsApp). Haga clic en '📋 Ver Todos' en la barra lateral para quitar el filtro.")
-        elif st.session_state.filtro_rapido_tipo == 'ejecucion':
-            df_fil = df_fil[df_fil['estado_ejecucion'] == st.session_state.filtro_rapido_valor]
-            st.info(f"💡 Mostrando solo: **{st.session_state.filtro_rapido_valor}** (Ejecución). Haga clic en '📋 Ver Todos' en la barra lateral para quitar el filtro.")
-
-        st.markdown("---")
-        st.write(f"#### 📋 Detalle de Órdenes ({len(df_fil)} registros)")
-        
-        cols_op = ['fecha_prog', 'jornada', 'hora', 'nombre', 'estado_visita', 'estado_ejecucion', 'contrato', 'inspector']
-        df_op_disp = df_fil[cols_op].copy()
-        df_op_disp.columns = ['F. Agenda', 'Jornada', 'Hora', 'Cliente', 'WhatsApp', 'Ejecución', 'Contrato', 'Inspector']
-
-        def style_op(row):
-            styles = [''] * len(row)
-            if 'Cumplidas' in str(row['Ejecución']): styles[row.index.get_loc('Ejecución')] = 'background-color: #e8f5e9; color: #2e7d32; font-weight: bold;'
-            if 'CONFIRM' in str(row['WhatsApp']).upper(): styles[row.index.get_loc('WhatsApp')] = 'color: #2e7d32; font-weight: bold;'
-            return styles
-
-        st.dataframe(df_op_disp.style.apply(style_op, axis=1), use_container_width=True, hide_index=True)
-    else:
-        st.info("Cargue la agenda en la izquierda.")
-
-# ------------------------------------------
-# TAB 2: CONTROL DE ANS (TIEMPOS)
-# ------------------------------------------
-with tab2:
-    if not df_dashboard.empty:
-        st.write("### ⏱️ Control de Acuerdos de Nivel de Servicio")
-        
-        df_ans = df_dashboard[df_dashboard['estado_ejecucion'] == '! Pendiente'].copy()
-        
-        def calcular_ans(row):
-            tipo = str(row.get('tipo', 'POR DEFECTO')).upper()
-            horas_limite = REGLAS_ANS.get(tipo, REGLAS_ANS['POR DEFECTO'])
-            fecha_asig = row['fecha_asig_dt']
+    # ------------------------------------------
+    # TAB 1: MÓDULO WHATSAPP Y AGENDA
+    # ------------------------------------------
+    with tab_wa:
+        st.write("### 📅 Generador de Agenda y Mensajería")
+        col_f1, col_f2 = st.columns([1, 3])
+        with col_f1:
+            fecha_select = st.date_input("Seleccione la Fecha de Programación:")
+            fecha_str = fecha_select.strftime('%Y-%m-%d')
             
-            if pd.isnull(fecha_asig): return "N/A", "Sin Fecha", 0
+        if 'fecha_prog_limpia' in df_activa.columns:
+            df_agenda_dia = df_activa[df_activa['fecha_prog_limpia'] == fecha_str].copy()
             
-            vencimiento = fecha_asig + datetime.timedelta(hours=horas_limite)
-            ahora = datetime.datetime.now()
-            diferencia = vencimiento - ahora
-            horas_restantes = diferencia.total_seconds() / 3600
-            
-            if horas_restantes < 0:
-                return "🔴 VENCIDO", f"Venció hace {abs(int(horas_restantes))}h", horas_restantes
-            elif horas_restantes < 24:
-                return "🟡 POR VENCER", f"Vence en {int(horas_restantes)}h", horas_restantes
+            if df_agenda_dia.empty:
+                st.info(f"No hay órdenes programadas para el {fecha_select.strftime('%d/%m/%Y')}.")
             else:
-                return "🟢 A TIEMPO", f"{int(horas_restantes)}h restantes", horas_restantes
+                st.success(f"Se encontraron **{len(df_agenda_dia)}** órdenes para el {fecha_select.strftime('%d/%m/%Y')}.")
+                
+                def marcar_msj_enviado(orden_id):
+                    df_temp = pd.read_csv(ARCHIVO_BASE, dtype=str)
+                    df_temp.loc[df_temp['orden'] == orden_id, 'estado_whatsapp'] = '✅ MSJ ENVIADO'
+                    df_temp.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
+                    st.toast(f"Mensaje marcado como enviado para orden {orden_id}")
 
-        if not df_ans.empty:
-            ans_results = df_ans.apply(calcular_ans, axis=1)
-            df_ans['Estado ANS'] = [r[0] for r in ans_results]
-            df_ans['Tiempo Restante'] = [r[1] for r in ans_results]
-            df_ans['horas_num'] = [r[2] for r in ans_results]
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Pendientes", len(df_ans))
-            m2.metric("Vencidos 🔴", len(df_ans[df_ans['Estado ANS'] == "🔴 VENCIDO"]))
-            m3.metric("Críticos (24h) 🟡", len(df_ans[df_ans['Estado ANS'] == "🟡 POR VENCER"]))
-
-            st.write("#### 🕵️ Auditoría Detallada de Incumplimientos")
-            cols_ans = ['Estado ANS', 'Tiempo Restante', 'fecha_asig_dt', 'contrato', 'inspector', 'ciudad']
-            df_ans_disp = df_ans.sort_values('horas_num')[cols_ans]
-            df_ans_disp.columns = ['Estado', 'Reloj ANS', 'F. Asignación', 'Contrato', 'Inspector', 'Ciudad']
-            
-            def style_ans(val):
-                if 'VENCIDO' in str(val): return 'background-color: #ffebee; color: #c62828; font-weight: bold;'
-                if 'POR VENCER' in str(val): return 'background-color: #fffde7; color: #f57f17; font-weight: bold;'
-                if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
-                return ''
-
-            st.dataframe(df_ans_disp.style.map(style_ans, subset=['Estado']), use_container_width=True, hide_index=True)
-            
-            fig_ans = px.bar(df_ans, x="inspector", color="Estado ANS", title="Cumplimiento de ANS por Inspector",
-                            color_discrete_map={"🔴 VENCIDO": "#e74c3c", "🟡 POR VENCER": "#f1c40f", "🟢 A TIEMPO": "#2ecc71"})
-            st.plotly_chart(fig_ans, use_container_width=True)
+                cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'jornada', 'num_vne', 'estado_whatsapp']
+                columnas_presentes = [c for c in cols_vista if c in df_agenda_dia.columns]
+                
+                # Renderizado SEGURO nativo
+                st.dataframe(df_agenda_dia[columnas_presentes], use_container_width=True)
+                
+                st.markdown("---")
+                st.write("#### Acciones de Mensajería")
+                if st.button("📤 Marcar todas las órdenes del día como 'Mensaje Enviado'", type="primary"):
+                    ordenes_dia = df_agenda_dia['orden'].tolist()
+                    df_temp = pd.read_csv(ARCHIVO_BASE, dtype=str)
+                    df_temp.loc[df_temp['orden'].isin(ordenes_dia), 'estado_whatsapp'] = '✅ MSJ ENVIADO'
+                    df_temp.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
+                    st.success("Toda la agenda del día ha sido marcada como 'Enviada'. Esperando confirmación del inspector.")
+                    st.rerun()
         else:
-            st.success("🎉 ¡No hay órdenes pendientes! Todos los ANS están al día.")
-    else:
-        st.info("Cargue la agenda para ver los indicadores de tiempo.")
+            st.error("La columna de Fecha de Programación no fue encontrada en la base.")
 
-# ==========================================
-# 5. ARCHIVADO (CORTE FINAL)
-# ==========================================
-if not df_dashboard.empty:
-    with st.sidebar:
+    # ------------------------------------------
+    # TAB 2: MONITOR OPERATIVO GENERAL (DISEÑO PARALELO SEGURO)
+    # ------------------------------------------
+    with tab_op:
+        st.write("### 📊 Monitor de Base Activa General")
+        
+        activos_count = df_activa['consumo'].astype(str).str.upper().str.contains('ACTIVO', na=False).sum()
+        suspendidos_count = df_activa['consumo'].astype(str).str.upper().str.contains('SUSPENDIDO', na=False).sum()
+        meses_60_count = (df_activa['meses'].astype(str).str.replace('.0', '', regex=False).str.strip() == '60').sum()
+
+        col_izq_op, col_der_op = st.columns([1, 1.2])
+        
+        with col_izq_op:
+            st.write("#### 📈 Métricas Generales")
+            c1, c2 = st.columns(2)
+            c1.metric("📋 Total Órdenes Activas", len(df_activa))
+            c2.metric("⏳ Esperando Ejecución", len(df_activa[df_activa['estado_ejecucion'] == 'Pendiente']))
+            
+            c3, c4 = st.columns(2)
+            c3.metric("🟢 Serv. Activos", activos_count)
+            c4.metric("🔴 Serv. Suspendidos", suspendidos_count)
+            
+            st.metric("📅 60 Meses (Total)", meses_60_count)
+
+        with col_der_op:
+            st.write("#### 📋 Resúmenes Operativos")
+            
+            # ✨ DISEÑO ESTÉTICO: Sub-pestañas para no saturar la pantalla
+            tab_res_tipo, tab_res_muni = st.tabs(["🛠️ Por Tipo de Trabajo", "📍 Por Municipio"])
+            
+            with tab_res_tipo:
+                if 'tipo_orden' in df_activa.columns:
+                    resumen_op = df_activa.groupby(['tipo_orden', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
+                    for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
+                        if col not in resumen_op.columns: resumen_op[col] = 0
+                    resumen_op['TOTAL'] = resumen_op.iloc[:, 1:].sum(axis=1)
+                    resumen_op.rename(columns={'tipo_orden': 'Tipo Trabajo'}, inplace=True)
+                    resumen_op = resumen_op.sort_values(by='TOTAL', ascending=False)
+                    
+                    st.dataframe(resumen_op, use_container_width=True, hide_index=True)
+            
+            with tab_res_muni:
+                if 'municipio' in df_activa.columns:
+                    resumen_muni = df_activa.groupby(['municipio', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
+                    for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
+                        if col not in resumen_muni.columns: resumen_muni[col] = 0
+                    resumen_muni['TOTAL'] = resumen_muni.iloc[:, 1:].sum(axis=1)
+                    resumen_muni.rename(columns={'municipio': 'Municipio'}, inplace=True)
+                    resumen_muni = resumen_muni.sort_values(by='TOTAL', ascending=False)
+                    
+                    st.dataframe(resumen_muni, use_container_width=True, hide_index=True)
+
         st.markdown("---")
-        if st.button("📦 Finalizar y Archivar", type="primary", use_container_width=True):
-            df_cerrar = df_dashboard[df_dashboard['estado_ejecucion'].isin(['✅ Cumplidas', '❌ No efectiva'])]
-            if not df_cerrar.empty:
-                nuevos = df_cerrar[['contrato']]
-                if os.path.exists('contratos_archivados.csv'): nuevos.to_csv('contratos_archivados.csv', mode='a', header=False, index=False)
-                else: nuevos.to_csv('contratos_archivados.csv', index=False)
-                st.success("Corte realizado con éxito.")
-                st.rerun()
+        st.write("#### 🗃️ Detalle de Base Activa Completa")
+        # Renderizado SEGURO nativo
+        st.dataframe(df_activa, use_container_width=True)
+
+    # ------------------------------------------
+    # TAB 3: AUDITORÍA DE TIEMPOS (ANS) (DISEÑO PARALELO SEGURO + GRÁFICO)
+    # ------------------------------------------
+    with tab_ans:
+        st.write("### ⏱️ Control de Acuerdos de Nivel de Servicio (Pendientes)")
+        
+        if 'fecha_asignacion' in df_activa.columns and 'tipo_orden' in df_activa.columns:
+            df_ans = df_activa[df_activa['estado_ejecucion'] != '✅ Cumplida (Archivada)'].copy()
+            
+            mask_masivas = df_ans['tipo_orden'].astype(str).str.upper().str.contains('10444|MASIVA', regex=True, na=False)
+            df_ans = df_ans[~mask_masivas]
+            
+            df_ans['fecha_asig_dt'] = pd.to_datetime(df_ans['fecha_asignacion'], errors='coerce')
+            
+            if 'num_vne' in df_ans.columns:
+                df_ans['num_vne'] = pd.to_numeric(df_ans['num_vne'], errors='coerce').fillna(0).astype(int)
+            else:
+                df_ans['num_vne'] = 0
+                
+            c_61 = df_ans['tipo_orden'].astype(str).str.upper().str.contains('61', na=False).sum()
+            c_63 = df_ans['tipo_orden'].astype(str).str.upper().str.contains('63', na=False).sum()
+            c_64 = df_ans['tipo_orden'].astype(str).str.upper().str.contains('64', na=False).sum()
+            
+            mask_tipos_obj = df_ans['tipo_orden'].astype(str).str.upper().str.contains('61|63|64', regex=True, na=False)
+            mask_60m = df_ans['meses'].astype(str).str.replace('.0', '', regex=False).str.strip() == '60'
+            c_60m_obj = (mask_tipos_obj & mask_60m).sum()
+            
+            def calcular_ans(row):
+                tipo = str(row.get('tipo_orden', '')).strip().upper()
+                consumo = str(row.get('consumo', '')).strip().upper()
+                fecha_asig = row['fecha_asig_dt']
+                
+                if pd.isnull(fecha_asig): return "N/A", "Sin Fecha", 0, 0
+                
+                ahora = datetime.datetime.now()
+                dias_sistema = (ahora - fecha_asig).days
+                if dias_sistema < 0: dias_sistema = 0
+                
+                dias_habiles = 5 
+                
+                if '61' in tipo or '12161' in tipo:
+                    dias_habiles = 2 if 'SUSPENDIDO' in consumo else 6
+                elif '12162' in tipo:
+                    dias_habiles = 2 if 'SUSPENDIDO' in consumo else 5
+                elif '63' in tipo or '12163' in tipo:
+                    dias_habiles = 2 if 'SUSPENDIDO' in consumo else 8
+                elif '64' in tipo or '12164' in tipo:
+                    dias_habiles = 2 if 'SUSPENDIDO' in consumo else 8
+                else:
+                    if 'SUSPENDIDO' in consumo:
+                        dias_habiles = 2
+                        
+                vencimiento = fecha_asig + pd.offsets.BDay(dias_habiles)
+                vencimiento = vencimiento.replace(hour=23, minute=59)
+                
+                diferencia = vencimiento - ahora
+                horas_restantes = diferencia.total_seconds() / 3600
+                
+                if horas_restantes < 0: 
+                    dias_retraso = abs(int(horas_restantes / 24))
+                    return "🔴 VENCIDO", f"Venció hace {dias_retraso} días", horas_restantes, dias_sistema
+                elif horas_restantes < 24: 
+                    return "🟡 POR VENCER", f"Vence en {int(horas_restantes)}h", horas_restantes, dias_sistema
+                else: 
+                    dias_restantes = int(horas_restantes / 24)
+                    return "🟢 A TIEMPO", f"Vence en {dias_restantes} días", horas_restantes, dias_sistema
+
+            if not df_ans.empty:
+                ans_results = df_ans.apply(calcular_ans, axis=1)
+                df_ans['Estado ANS'] = [r[0] for r in ans_results]
+                df_ans['Tiempo Restante'] = [r[1] for r in ans_results]
+                df_ans['horas_num'] = [r[2] for r in ans_results]
+                df_ans['Días Sistema'] = [r[3] for r in ans_results]
+                
+                col_izq_ans, col_der_ans = st.columns([1, 1.2])
+
+                with col_izq_ans:
+                    st.write("#### 📊 Contadores Especiales")
+                    col_ce1, col_ce2 = st.columns(2)
+                    col_ce1.metric("📌 Ext. 61 / 12161", c_61)
+                    col_ce2.metric("📌 Ext. 63 / 12163", c_63)
+                    
+                    col_ce3, col_ce4 = st.columns(2)
+                    col_ce3.metric("📌 Ext. 64 / 12164", c_64)
+                    col_ce4.metric("📅 60 Meses (Objetivo)", c_60m_obj)
+                    
+                    st.markdown("---")
+                    st.write("#### ⚠️ Alertas de Tiempos")
+                    m1, m2 = st.columns(2)
+                    m1.metric("🔴 Vencidos Totales", len(df_ans[df_ans['Estado ANS'] == "🔴 VENCIDO"]))
+                    m2.metric("🟡 Críticos Totales (24h)", len(df_ans[df_ans['Estado ANS'] == "🟡 POR VENCER"]))
+
+                with col_der_ans:
+                    st.write("#### 📋 ANS por Tipo de Trabajo")
+                    resumen_ans = df_ans.groupby(['tipo_orden', 'Estado ANS']).size().unstack(fill_value=0).reset_index()
+                    for c in ["🔴 VENCIDO", "🟡 POR VENCER", "🟢 A TIEMPO"]:
+                        if c not in resumen_ans.columns: resumen_ans[c] = 0
+                    resumen_ans['TOTAL'] = resumen_ans["🔴 VENCIDO"] + resumen_ans["🟡 POR VENCER"] + resumen_ans["🟢 A TIEMPO"]
+                    resumen_ans.rename(columns={'tipo_orden': 'Tipo Trabajo'}, inplace=True)
+                    resumen_ans = resumen_ans.sort_values(by='TOTAL', ascending=False)
+                    
+                    # Renderizado SEGURO nativo
+                    st.dataframe(resumen_ans, use_container_width=True, hide_index=True)
+                
+                # GRÁFICO SEGURO
+                st.markdown("---")
+                st.write("#### 📈 Rendimiento Operativo de Tiempos")
+                x_col = "inspector" if "inspector" in df_ans.columns else "tipo_orden"
+                fig_ans = px.bar(df_ans, x=x_col, color="Estado ANS", 
+                                title=f"Distribución de Órdenes ({x_col.replace('_', ' ').title()})",
+                                color_discrete_map={"🔴 VENCIDO": "#c62828", "🟡 POR VENCER": "#f57f17", "🟢 A TIEMPO": "#2e7d32"})
+                st.plotly_chart(fig_ans, use_container_width=True)
+
+                st.markdown("---")
+                st.write("#### 🕵️ Auditoría Detallada de Tiempos y Visitas")
+                cols_ans = ['Estado ANS', 'Tiempo Restante', 'Días Sistema', 'num_vne', 'fecha_asignacion', 'orden', 'contrato', 'tipo_orden', 'consumo']
+                cols_disponibles = [c for c in cols_ans if c in df_ans.columns]
+                
+                df_ans_disp = df_ans.sort_values('horas_num')[cols_disponibles]
+                
+                map_nombres = {
+                    'Estado ANS': 'Estado', 'Tiempo Restante': 'Reloj ANS (Hábiles)', 'Días Sistema': 'Días Sistema (Calendario)', 
+                    'num_vne': '# VNE', 'fecha_asignacion': 'F. Asignación', 'orden': 'Orden', 'contrato': 'Contrato',
+                    'tipo_orden': 'Tipo Trabajo', 'consumo': 'Estado Consumo'
+                }
+                df_ans_disp.rename(columns=map_nombres, inplace=True)
+                
+                def style_ans(val):
+                    if 'VENCIDO' in str(val): return 'background-color: #ffebee; color: #c62828; font-weight: bold;'
+                    if 'POR VENCER' in str(val): return 'background-color: #fffde7; color: #f57f17; font-weight: bold;'
+                    if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
+                    return ''
+
+                # Renderizado SEGURO con colores
+                st.dataframe(df_ans_disp.style.map(style_ans, subset=['Estado']), use_container_width=True, hide_index=True)
+            else:
+                st.success("🎉 ¡No hay órdenes bajo seguimiento ANS actualmente!")
+        else:
+            st.warning("Las columnas 'Fecha asignación' o 'Tipo orden' no se detectaron en su matriz base para calcular los ANS.")
+
+    # ------------------------------------------
+    # TAB 4: HISTORIAL
+    # ------------------------------------------
+    with tab_hist:
+        st.write("### 📦 Repositorio de Órdenes Cumplidas y Archivadas")
+        st.info("Aquí reposan todas las órdenes que cruzaron como 'Certificadas' o 'Cumplidas' en GoDoWorks. Estas ya no afectan la Base General.")
+        if os.path.exists(ARCHIVO_HISTORIAL):
+            df_hist_view = pd.read_csv(ARCHIVO_HISTORIAL, dtype=str)
+            st.metric("Total Órdenes Históricas", len(df_hist_view))
+            
+            # Renderizado SEGURO nativo
+            st.dataframe(df_hist_view, use_container_width=True, hide_index=True)
+            
+            buf = io.BytesIO()
+            df_hist_view.to_excel(buf, index=False)
+            st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", use_container_width=True)
+        else:
+            st.info("El historial está vacío. Aún no se han cruzado órdenes cumplidas.")
