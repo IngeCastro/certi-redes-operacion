@@ -62,20 +62,19 @@ def guardar_tabla(df, nombre_tabla):
         # 1. Creamos la estructura de la tabla vacía
         df.head(0).to_sql(nombre_tabla, engine, if_exists='replace', index=False)
         
-        # 2. Subimos los datos por goteo para no saturar el internet local
-        chunk_size = 500
+        # 2. Subimos los datos por bloques más grandes y SIN pausas que duerman el servidor
+        chunk_size = 1500 # Aumentamos el bloque para mayor velocidad
         progreso = st.progress(0, text="Iniciando transmisión segura a la nube...")
         
         for i in range(0, len(df), chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             chunk.to_sql(nombre_tabla, engine, if_exists='append', index=False)
             
-            # Actualizamos la barra de progreso
+            # Actualizamos la barra de progreso de forma continua
             avance = min((i + len(chunk)) / len(df), 1.0)
-            progreso.progress(avance, text=f"☁️ Subiendo bloque {i//chunk_size + 1}... ({i+len(chunk)}/{len(df)} filas)")
+            progreso.progress(avance, text=f"☁️ Subiendo bloque {i//chunk_size + 1}... ({min(i+len(chunk), len(df))}/{len(df)} filas)")
             
-            # Micro-pausa vital para que Streamlit mantenga viva la conexión y no arroje StreamClosedError
-            time.sleep(0.5) 
+            # ELIMINAMOS EL time.sleep(0.5) AQUÍ PARA EVITAR QUE STREAMLIT SE DESCONECTE
             
         print("-> ¡Subida a la nube exitosa!")
         st.cache_data.clear() # Limpiamos caché para ver los datos nuevos inmediatamente
@@ -199,6 +198,14 @@ def procesar_nuevas_bases(archivos_subidos):
                 columnas_protegidas = ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'estado_visita']
                 cols_existentes = [c for c in columnas_protegidas if c in df_base_index.columns and c in df_nuevos.columns]
                 
+                # PASO CLAVE CORREGIDO: Evitamos el choque de formatos convirtiendo ambas partes a string
+                df_nuevos[cols_existentes] = df_nuevos[cols_existentes].astype(str)
+                df_base_index[cols_existentes] = df_base_index[cols_existentes].astype(str)
+                
+                # Limpiamos los 'None' literales que pueda mandar la base de datos
+                df_base_index[cols_existentes] = df_base_index[cols_existentes].replace(['None', 'nan', '<NA>'], 'Pendiente')
+                
+                # Ahora la actualización es segura
                 df_nuevos.update(df_base_index[cols_existentes])
                 df_nuevos = df_nuevos.reset_index()
                 
