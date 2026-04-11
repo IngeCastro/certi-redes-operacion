@@ -74,8 +74,6 @@ def guardar_tabla(df, nombre_tabla):
             avance = min((i + len(chunk)) / len(df), 1.0)
             progreso.progress(avance, text=f"☁️ Subiendo bloque {i//chunk_size + 1}... ({min(i+len(chunk), len(df))}/{len(df)} filas)")
             
-            # ELIMINAMOS EL time.sleep(0.5) AQUÍ PARA EVITAR QUE STREAMLIT SE DESCONECTE
-            
         print("-> ¡Subida a la nube exitosa!")
         st.cache_data.clear() # Limpiamos caché para ver los datos nuevos inmediatamente
     except Exception as e:
@@ -287,15 +285,25 @@ def procesar_godoworks(archivo_godo):
 # 3. BARRA LATERAL (MENÚ DE CARGA)
 # ==========================================
 with st.sidebar:
-    try: st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
-    except: st.write("### CERTI-REDES S.A.S")
+    try: 
+        st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
+    except: 
+        st.write("### CERTI-REDES S.A.S")
+    
+    st.write("") # ESPACIO EN BLANCO PARA RESPIRAR LA INTERFAZ
     st.markdown("🟢 **Conectado a la Nube (Supabase)**")
     
+    st.write("") 
     st.markdown("---")
+    
     st.markdown("### 📥 1. ALIMENTAR BASE GENERAL")
     st.info("Suba sus bases diarias. El sistema rechazará automáticamente las órdenes que ya son Efectivas en la Nube.")
+    st.write("")
     archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx/.csv)", type=["xlsm", "xlsx", "csv"], accept_multiple_files=True)
-    if archivos_bases and st.button("🚀 Procesar Bases de Datos", use_container_width=True):
+    st.write("")
+    
+    # ACTUALIZADO: use_container_width a width='stretch'
+    if archivos_bases and st.button("🚀 Procesar Bases de Datos", width="stretch"):
         with st.spinner("Iniciando motor de datos. Por favor, no recargue la página..."):
             resultado = procesar_nuevas_bases(archivos_bases)
             if resultado is True:
@@ -304,11 +312,18 @@ with st.sidebar:
             elif isinstance(resultado, str):
                 st.error(resultado)
 
+    st.write("")
     st.markdown("---")
+    st.write("")
+    
     st.markdown("### 🛠️ 2. ACTUALIZAR EJECUCIÓN (GoDoWorks)")
     st.info("Sube el archivo de GoDoWorks. Las órdenes 'Cumplidas' irán al Historial y las 'No Efectivas' sumarán VNE.")
+    st.write("")
     archivo_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"])
-    if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", use_container_width=True):
+    st.write("")
+    
+    # ACTUALIZADO: use_container_width a width='stretch'
+    if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", width="stretch"):
         with st.spinner("Sincronizando estados en la Nube..."):
             if procesar_godoworks(archivo_godo):
                 st.success("¡Cruce realizado! Órdenes actualizadas y/o archivadas en la Nube.")
@@ -345,7 +360,9 @@ def centrar_df(df_o_styler):
         {'selector': 'td', 'props': [('text-align', 'center !important')]}
     ])
 
+st.write("")
 st.title("🚀 Panel de Control Operativo - Certi-Redes (Cloud)")
+st.write("")
 
 if df_activa.empty:
     st.warning("⚠️ La Base General en la Nube está vacía. Por favor, cargue los archivos de Excel en el panel lateral para crearla.")
@@ -361,7 +378,9 @@ else:
     # TAB 1: MÓDULO WHATSAPP Y AGENDA
     # ------------------------------------------
     with tab_wa:
+        st.write("")
         st.write("### 📅 Generador de Agenda y Mensajería")
+        st.write("")
         
         col_f1, col_f2 = st.columns([1, 3])
         with col_f1:
@@ -379,6 +398,7 @@ else:
                 c_conf = len(df_agenda_dia[df_agenda_dia['estado_visita'].astype(str).str.upper().str.contains('CONFIRMADO')])
                 c_canc = len(df_agenda_dia[df_agenda_dia['estado_visita'].astype(str).str.upper().str.contains('CANCELADO')])
 
+                st.write("")
                 st.write("#### 📊 Resumen de Mensajería del Día")
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("📅 Total Programados", c_prog)
@@ -386,11 +406,14 @@ else:
                 m3.metric("✅ Confirmados", c_conf)
                 m4.metric("❌ Cancelados", c_canc)
 
+                st.write("")
                 st.markdown("---")
+                st.write("")
                 
                 col_btn, _ = st.columns([1, 3])
                 with col_btn:
-                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", use_container_width=True):
+                    # ACTUALIZADO: use_container_width a width='stretch'
+                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", width="stretch"):
                         ordenes_dia = df_agenda_dia['orden'].tolist()
                         df_temp = cargar_tabla(TABLA_BASE)
                         df_temp.loc[df_temp['orden'].isin(ordenes_dia), 'estado_whatsapp'] = '✅ MSJ ENVIADO'
@@ -398,11 +421,12 @@ else:
                         st.success("Toda la agenda del día ha sido marcada como 'Enviada' en la Nube.")
                         st.rerun()
                 
+                st.write("")
                 st.write("#### 📋 Detalle de la Agenda")
                 cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'jornada', 'num_vne', 'estado_whatsapp', 'estado_visita']
                 columnas_presentes = [c for c in cols_vista if c in df_agenda_dia.columns]
                 
-                st.dataframe(centrar_df(df_agenda_dia[columnas_presentes]), use_container_width=True)
+                st.dataframe(centrar_df(df_agenda_dia[columnas_presentes]), width="stretch")
                 
         else:
             st.error("La columna de Fecha de Programación no fue encontrada en la base.")
@@ -411,7 +435,9 @@ else:
     # TAB 2: MONITOR OPERATIVO GENERAL
     # ------------------------------------------
     with tab_op:
+        st.write("")
         st.write("### 📊 Monitor de Base Activa General")
+        st.write("")
         
         activos_count = df_activa['consumo'].astype(str).str.upper().str.contains('ACTIVO', na=False).sum()
         suspendidos_count = df_activa['consumo'].astype(str).str.upper().str.contains('SUSPENDIDO', na=False).sum()
@@ -425,10 +451,12 @@ else:
             c1.metric("📋 Total Órdenes Activas", len(df_activa))
             c2.metric("⏳ Esperando Ejecución", len(df_activa[df_activa['estado_ejecucion'] == 'Pendiente']))
             
+            st.write("")
             c3, c4 = st.columns(2)
             c3.metric("🟢 Serv. Activos", activos_count)
             c4.metric("🔴 Serv. Suspendidos", suspendidos_count)
             
+            st.write("")
             st.metric("📅 60 Meses (Total)", meses_60_count)
 
         with col_der_op:
@@ -457,15 +485,19 @@ else:
                 
                 st.table(centrar_df(resumen_muni))
 
+        st.write("")
         st.markdown("---")
+        st.write("")
         st.write("#### 🗃️ Detalle de Base Activa Completa")
-        st.dataframe(centrar_df(df_activa), use_container_width=True)
+        st.dataframe(centrar_df(df_activa), width="stretch")
 
     # ------------------------------------------
     # TAB 3: AUDITORÍA DE TIEMPOS (ANS)
     # ------------------------------------------
     with tab_ans:
+        st.write("")
         st.write("### ⏱️ Control de Acuerdos de Nivel de Servicio (Pendientes)")
+        st.write("")
         
         if 'fecha_asignacion' in df_activa.columns and 'tipo_orden' in df_activa.columns:
             df_ans = df_activa[df_activa['estado_ejecucion'] != '✅ Cumplida (Archivada)'].copy()
@@ -543,10 +575,12 @@ else:
                     col_ce1.metric("📌 Ext. 61 / 12161", c_61)
                     col_ce2.metric("📌 Ext. 63 / 12163", c_63)
                     
+                    st.write("")
                     col_ce3, col_ce4 = st.columns(2)
                     col_ce3.metric("📌 Ext. 64 / 12164", c_64)
                     col_ce4.metric("📅 60 Meses (Objetivo)", c_60m_obj)
                     
+                    st.write("")
                     st.markdown("---")
                     st.write("#### ⚠️ Alertas de Tiempos")
                     m1, m2 = st.columns(2)
@@ -564,14 +598,16 @@ else:
                     
                     st.table(centrar_df(resumen_ans))
                 
+                st.write("")
                 st.markdown("---")
                 st.write("#### 📈 Rendimiento Operativo de Tiempos")
                 x_col = "inspector" if "inspector" in df_ans.columns else "tipo_orden"
                 fig_ans = px.bar(df_ans, x=x_col, color="Estado ANS", 
                                 title=f"Distribución de Órdenes ({x_col.replace('_', ' ').title()})",
                                 color_discrete_map={"🔴 VENCIDO": "#c62828", "🟡 POR VENCER": "#f57f17", "🟢 A TIEMPO": "#2e7d32"})
-                st.plotly_chart(fig_ans, use_container_width=True)
+                st.plotly_chart(fig_ans, width="stretch")
 
+                st.write("")
                 st.markdown("---")
                 st.write("#### 🕵️ Auditoría Detallada de Tiempos y Visitas")
                 cols_ans = ['Estado ANS', 'Tiempo Restante', 'Días Sistema', 'num_vne', 'fecha_asignacion', 'orden', 'contrato', 'tipo_orden', 'consumo']
@@ -592,7 +628,7 @@ else:
                     if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
                     return ''
 
-                st.dataframe(centrar_df(df_ans_disp.style.map(style_ans, subset=['Estado'])), use_container_width=True)
+                st.dataframe(centrar_df(df_ans_disp.style.map(style_ans, subset=['Estado'])), width="stretch")
             else:
                 st.success("🎉 ¡No hay órdenes bajo seguimiento ANS actualmente!")
         else:
@@ -602,17 +638,21 @@ else:
     # TAB 4: HISTORIAL
     # ------------------------------------------
     with tab_hist:
+        st.write("")
         st.write("### 📦 Repositorio de Órdenes Cumplidas y Archivadas en la Nube")
         st.info("Aquí reposan todas las órdenes que cruzaron como 'Certificadas' o 'Cumplidas'. Estas ya no afectan la Base General.")
+        st.write("")
         
         df_hist_view = cargar_tabla(TABLA_HISTORIAL)
         
         if not df_hist_view.empty:
             st.metric("Total Órdenes Históricas", len(df_hist_view))
-            st.dataframe(centrar_df(df_hist_view), use_container_width=True)
+            st.write("")
+            st.dataframe(centrar_df(df_hist_view), width="stretch")
             
             buf = io.BytesIO()
             df_hist_view.to_excel(buf, index=False)
-            st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", use_container_width=True)
+            st.write("")
+            st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", width="stretch")
         else:
             st.info("El historial de la base de datos está vacío. Aún no se han cruzado órdenes cumplidas.")
