@@ -4,6 +4,7 @@ from PIL import Image
 import io
 import plotly.express as px  
 import datetime
+from sqlalchemy import create_engine
 import os
 
 # ==========================================
@@ -11,80 +12,168 @@ import os
 # ==========================================
 st.set_page_config(layout="wide", page_title="Panel Certi-Redes", page_icon="✅")
 
-ARCHIVO_BASE = 'base_general.csv'
-ARCHIVO_HISTORIAL = 'historial_certiredes.csv'
-ARCHIVO_LOG_WA = 'log_certiredes.txt'
+# Ampliar el límite de celdas a 5 millones para Pandas Styler
+pd.set_option("styler.render.max_elements", 5000000)
 
 # ==========================================
-# 1. FUNCIONES DEL MOTOR DE DATOS
+# 1. CONEXIÓN A BASE DE DATOS SUPABASE
+# ==========================================
+@st.cache_resource
+def init_connection():
+    try:
+        # Se conecta usando el secreto guardado en su bóveda .streamlit/secrets.toml
+        uri = st.secrets["SUPABASE_URI"]
+        if "sslmode" not in uri:
+            uri += "?sslmode=require"
+        return create_engine(uri)
+    except Exception as e:
+        st.error(f"⚠️ Error fatal de conexión a la Base de Datos: {e}")
+        st.stop()
+
+engine = init_connection()
+
+# Funciones maestras de Lectura/Escritura a la Nube
+@st.cache_data(ttl=600) # <--- ¡ESTA ES LA MAGIA! Guarda los datos por 10 minutos
+def cargar_tabla(nombre_tabla):
+    """Descarga la tabla desde Supabase a la memoria."""
+    try:
+        df = pd.read_sql_table(nombre_tabla, engine)
+        return df.astype(str) # Forzamos a texto para mantener la compatibilidad operativa
+    except ValueError:
+        # Si da ValueError es porque la tabla aún no existe (está vacía), retornamos un DataFrame vacío
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Error al leer la base de datos ({nombre_tabla}): {e}")
+        return pd.DataFrame()
+
+def guardar_tabla(df, nombre_tabla):
+    """Sube y sobrescribe la tabla en Supabase por LOTES para evitar colapso de memoria."""
+    try:
+        print(f"-> Subiendo {len(df)} filas a la nube en bloques de 1000...")
+        # CHUNKSIZE es la magia para que el archivo gigante de 74MB pase sin bloquearse
+        df.to_sql(nombre_tabla, engine, if_exists='replace', index=False, chunksize=1000)
+        print("-> ¡Subida a la nube exitosa!")
+    except Exception as e:
+        print(f"❌ Error crítico al guardar en la nube: {e}")
+        raise e # Lanza el error para que el detective lo atrape
+
+# Nombres de las tablas en la nube
+TABLA_BASE = 'base_general'
+TABLA_HISTORIAL = 'historial_certiredes'
+
+# ==========================================
+# 2. FUNCIONES DEL MOTOR DE DATOS
 # ==========================================
 
 def normalizar_columnas(df):
     """Limpia y estandariza los nombres de las columnas para evitar errores de espacios."""
     df.columns = df.columns.astype(str).str.strip().str.lower()
-    # Mapeo de seguridad por si cambian ligeramente los nombres
+    
+    # Aquí unificamos los nombres de su Excel con lo que pide el Dashboard
     mapeo = {
         'orden': 'orden', 'contrato': 'contrato', 'nombre': 'nombre', 
         'dirección': 'direccion', 'direccion': 'direccion', 'telefono': 'telefono',
         'fecha programación': 'fecha_programacion', 'fecha programacion': 'fecha_programacion',
-        'jornada': 'jornada', 'tipo orden': 'tipo_orden', 'tipo trabajo': 'tipo_orden', 
+        'jornada': 'jornada', 
+        'tipo orden': 'tipo_orden', 
+        'tipo trabajo': 'tipo_trabajo', # <--- ¡EL ERROR ESTABA AQUÍ, YA ESTÁ CORREGIDO!
         'fecha asignación': 'fecha_asignacion', 'fecha asignacion': 'fecha_asignacion', 
         '# vne': 'num_vne', 'consumo': 'consumo', 'meses': 'meses',
-        'cabecera': 'municipio', 'cabeceras': 'municipio'
+        'cabecera': 'municipio', 'cabeceras': 'municipio',
+        'nombre técnico': 'inspector', 'estado gestión': 'estado_ejecucion'
     }
     df.rename(columns=mapeo, inplace=True)
     return df
 
 def procesar_nuevas_bases(archivos_subidos):
-    """Lee los Excels subidos, extrae la pestaña Coordinación y actualiza la base general."""
-    nuevos_registros = []
-    
-    for archivo in archivos_subidos:
-        try:
-            # Leer pestaña Coordinación, fila 5 como cabecera (header=4 en índice base 0)
+    """Lee los Excels subidos, rechaza las órdenes del historial y actualiza la base en la Nube."""
+    try:
+        print("\n=== INICIANDO PROCESO DE CARGA Y DETECCIÓN ===")
+        nuevos_registros = []
+        
+        for archivo in archivos_subidos:
+            print(f"Paso 1: Leyendo el archivo '{archivo.name}'...")
             df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+            print(f"-> Archivo leído. Filas encontradas: {len(df_temp)}")
+            
+            print("Paso 2: Normalizando nombres de columnas...")
             df_temp = normalizar_columnas(df_temp)
             
-            # Limpiar formatos base
             if 'orden' in df_temp.columns and 'contrato' in df_temp.columns:
+                print("-> Limpiando columnas clave (Orden y Contrato)...")
                 df_temp['orden'] = df_temp['orden'].astype(str).str.replace('.0', '', regex=False).str.strip()
                 df_temp['contrato'] = df_temp['contrato'].astype(str).str.replace('.0', '', regex=False).str.strip()
-                df_temp = df_temp[df_temp['orden'] != 'nan'] # Eliminar filas vacías
+                df_temp = df_temp[df_temp['orden'] != 'nan'] 
                 nuevos_registros.append(df_temp)
-        except Exception as e:
-            st.error(f"Error al procesar el archivo {archivo.name}. Verifique que tenga la pestaña 'Coordinación' y cabeceras en la fila 5. Detalle: {e}")
+            else:
+                print("❌ ADVERTENCIA: El archivo no tiene columnas 'Orden' o 'Contrato'.")
 
-    if nuevos_registros:
-        df_nuevos = pd.concat(nuevos_registros, ignore_index=True)
-        
-        # Formatear fechas estandarizadas al formato universal (YYYY-MM-DD) para evitar cruces
-        if 'fecha_programacion' in df_nuevos.columns:
-            df_nuevos['fecha_prog_limpia'] = pd.to_datetime(df_nuevos['fecha_programacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
-        if 'fecha_asignacion' in df_nuevos.columns:
-            df_nuevos['fecha_asignacion'] = pd.to_datetime(df_nuevos['fecha_asignacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+        if nuevos_registros:
+            print("Paso 3: Consolidando los archivos subidos...")
+            df_nuevos = pd.concat(nuevos_registros, ignore_index=True)
             
-        # Inicializar columnas operativas si no existen
-        for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne']:
-            if col not in df_nuevos.columns:
-                df_nuevos[col] = 0 if col == 'num_vne' else 'Pendiente'
-        
-        # Limpiar columna Meses de decimales por seguridad
-        if 'meses' in df_nuevos.columns:
-            df_nuevos['meses'] = df_nuevos['meses'].astype(str).str.replace('.0', '', regex=False).str.strip()
+            print("Paso 4: Verificando historial en la nube para rechazar repetidas...")
+            df_hist = cargar_tabla(TABLA_HISTORIAL)
+            if not df_hist.empty and 'orden' in df_hist.columns:
+                ordenes_cerradas = df_hist['orden'].astype(str).tolist()
+                df_nuevos = df_nuevos[~df_nuevos['orden'].isin(ordenes_cerradas)]
+            
+            if df_nuevos.empty:
+                print("-> Fin: Las bases cargadas solo contenían órdenes ya cerradas.")
+                return "Las bases cargadas solo contenían órdenes que ya fueron cerradas y archivadas anteriormente."
+
+            print("Paso 5: Dando formato a las fechas...")
+            if 'fecha_programacion' in df_nuevos.columns:
+                df_nuevos['fecha_prog_limpia'] = pd.to_datetime(df_nuevos['fecha_programacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+            if 'fecha_asignacion' in df_nuevos.columns:
+                df_nuevos['fecha_asignacion'] = pd.to_datetime(df_nuevos['fecha_asignacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
                 
-        # Cargar base existente o crearla
-        if os.path.exists(ARCHIVO_BASE):
-            df_base = pd.read_csv(ARCHIVO_BASE, dtype=str)
-            df_consolidado = pd.concat([df_base, df_nuevos]).drop_duplicates(subset=['orden'], keep='last')
-        else:
-            df_consolidado = df_nuevos
+            print("Paso 6: Asegurando columnas operativas...")
+            for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita']:
+                if col not in df_nuevos.columns:
+                    if col == 'num_vne': df_nuevos[col] = 0
+                    elif col == 'municipio': df_nuevos[col] = 'SIN DEFINIR'
+                    elif col == 'estado_ejecucion': df_nuevos[col] = 'Pendiente'
+                    elif col == 'estado_visita': df_nuevos[col] = '⏳ Esperando'
+                    else: df_nuevos[col] = 'Pendiente'
             
-        df_consolidado.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
-        return True
-    return False
+            if 'meses' in df_nuevos.columns:
+                df_nuevos['meses'] = df_nuevos['meses'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                    
+            print("Paso 7: Mezclando datos nuevos con la base activa en la Nube...")
+            df_base = cargar_tabla(TABLA_BASE)
+            if not df_base.empty:
+                df_nuevos = df_nuevos.set_index('orden')
+                df_base_index = df_base.set_index('orden')
+                
+                columnas_protegidas = ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'estado_visita']
+                cols_existentes = [c for c in columnas_protegidas if c in df_base_index.columns and c in df_nuevos.columns]
+                
+                df_nuevos.update(df_base_index[cols_existentes])
+                df_nuevos = df_nuevos.reset_index()
+                
+                df_base = df_base[~df_base['orden'].isin(df_nuevos['orden'])]
+                df_consolidado = pd.concat([df_base, df_nuevos], ignore_index=True)
+            else:
+                df_consolidado = df_nuevos
+                
+            print("Paso 8: Iniciando la transmisión final a Supabase...")
+            guardar_tabla(df_consolidado, TABLA_BASE)
+            print("=== PROCESO TERMINADO CON ÉXITO ===")
+            return True
+        return False
+        
+    except Exception as e:
+        # ¡ESTA ES LA TRAMPA PARA EL ERROR SILENCIOSO!
+        mensaje_error = f"Tipo de error: {type(e).__name__} | Mensaje: {str(e)}"
+        print("\n" + "="*40)
+        print("🚨 ¡ALERTA DE FALLO CRÍTICO EN EL MOTOR! 🚨")
+        print(mensaje_error)
+        print("="*40 + "\n")
+        return f"Error fatal detectado por el sistema: {mensaje_error}"
 
 def procesar_godoworks(archivo_godo):
-    """Procesa el CSV de GoDoWorks, archiva cumplidas y suma VNE."""
+    """Procesa el CSV de GoDoWorks, archiva cumplidas y suma VNE en la Nube."""
     try:
         if archivo_godo.name.lower().endswith('.csv'):
             contenido = archivo_godo.getvalue().decode('utf-8-sig', errors='replace')
@@ -103,12 +192,12 @@ def procesar_godoworks(archivo_godo):
 
         df_godo[col_contrato] = df_godo[col_contrato].astype(str).str.replace('.0', '', regex=False).str.strip()
         
-        if not os.path.exists(ARCHIVO_BASE):
-            st.warning("No hay una Base General activa para actualizar.")
+        df_base = cargar_tabla(TABLA_BASE)
+        if df_base.empty:
+            st.warning("No hay una Base General activa en la nube para actualizar.")
             return False
             
-        df_base = pd.read_csv(ARCHIVO_BASE, dtype=str)
-        df_historial = pd.read_csv(ARCHIVO_HISTORIAL, dtype=str) if os.path.exists(ARCHIVO_HISTORIAL) else pd.DataFrame()
+        df_historial = cargar_tabla(TABLA_HISTORIAL)
         
         ordenes_a_archivar = []
         
@@ -128,59 +217,82 @@ def procesar_godoworks(archivo_godo):
             df_cumplidas = df_base[df_base['orden'].isin(ordenes_a_archivar)].copy()
             df_cumplidas['estado_ejecucion'] = '✅ Cumplida (Archivada)'
             df_historial = pd.concat([df_historial, df_cumplidas], ignore_index=True)
-            df_historial.to_csv(ARCHIVO_HISTORIAL, index=False, encoding='utf-8-sig')
+            guardar_tabla(df_historial, TABLA_HISTORIAL)
             
             df_base = df_base[~df_base['orden'].isin(ordenes_a_archivar)]
 
-        df_base.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
+        guardar_tabla(df_base, TABLA_BASE)
         return True
     except Exception as e:
         st.error(f"Error procesando GoDoWorks: {e}")
         return False
 
 # ==========================================
-# 2. BARRA LATERAL (MENÚ DE CARGA)
+# 3. BARRA LATERAL (MENÚ DE CARGA)
 # ==========================================
 with st.sidebar:
     try: st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
     except: st.write("### CERTI-REDES S.A.S")
+    st.markdown("🟢 **Conectado a la Nube (Supabase)**")
     
     st.markdown("---")
     st.markdown("### 📥 1. ALIMENTAR BASE GENERAL")
-    st.info("Suba uno o varios archivos de Excel. El sistema buscará la hoja 'Coordinación' a partir de la fila 5.")
+    st.info("Suba sus bases diarias. El sistema rechazará automáticamente las órdenes que ya son Efectivas en la Nube.")
     archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx)", type=["xlsm", "xlsx"], accept_multiple_files=True)
     if archivos_bases and st.button("🚀 Procesar Bases de Datos", use_container_width=True):
-        if procesar_nuevas_bases(archivos_bases):
-            st.success("¡Base General actualizada correctamente!")
-            st.rerun()
+        with st.spinner("Subiendo datos a Supabase. Mire la terminal de VS Code..."):
+            resultado = procesar_nuevas_bases(archivos_bases)
+            if resultado is True:
+                st.success("¡Base General actualizada en la Nube correctamente!")
+                st.rerun()
+            elif isinstance(resultado, str):
+                st.error(resultado) # Ahora mostrará el error exacto en rojo en la pantalla
 
     st.markdown("---")
     st.markdown("### 🛠️ 2. ACTUALIZAR EJECUCIÓN (GoDoWorks)")
     st.info("Sube el archivo de GoDoWorks. Las órdenes 'Cumplidas' irán al Historial y las 'No Efectivas' sumarán VNE.")
     archivo_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"])
     if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", use_container_width=True):
-        if procesar_godoworks(archivo_godo):
-            st.success("¡Cruce realizado! Órdenes actualizadas y/o archivadas.")
-            st.rerun()
+        with st.spinner("Sincronizando estados en la Nube..."):
+            if procesar_godoworks(archivo_godo):
+                st.success("¡Cruce realizado! Órdenes actualizadas y/o archivadas en la Nube.")
+                st.rerun()
 
-# Cargar Base Activa a memoria para la visualización
-df_activa = pd.DataFrame()
-if os.path.exists(ARCHIVO_BASE):
-    df_activa = pd.read_csv(ARCHIVO_BASE, dtype=str)
-    # Rellenar columnas si el CSV antiguo no las tenía
+# ==========================================
+# 4. LECTURA DE LA NUBE PARA VISUALIZACIÓN
+# ==========================================
+df_activa = cargar_tabla(TABLA_BASE)
+
+# Reparación automática en memoria por si faltan columnas
+if not df_activa.empty:
     if 'consumo' not in df_activa.columns: df_activa['consumo'] = 'N/A'
     if 'meses' not in df_activa.columns: df_activa['meses'] = 'N/A'
     if 'tipo_orden' not in df_activa.columns: df_activa['tipo_orden'] = 'POR DEFECTO'
     if 'municipio' not in df_activa.columns: df_activa['municipio'] = 'SIN DEFINIR'
+    if 'estado_ejecucion' not in df_activa.columns: df_activa['estado_ejecucion'] = 'Pendiente'
+    if 'estado_visita' not in df_activa.columns: df_activa['estado_visita'] = '⏳ Esperando'
 
 # ==========================================
-# 3. INTERFAZ PRINCIPAL (PESTAÑAS)
+# 5. INTERFAZ PRINCIPAL (PESTAÑAS)
 # ==========================================
 
-st.title("🚀 Panel de Control Operativo - Certi-Redes")
+def centrar_df(df_o_styler):
+    if isinstance(df_o_styler, pd.DataFrame):
+        df_str = df_o_styler.fillna('').astype(str)
+        styler = df_str.style
+    else:
+        styler = df_o_styler
+        styler = styler.format(lambda x: str(x) if pd.notnull(x) else '')
+            
+    return styler.set_properties(**{'text-align': 'center !important'}).set_table_styles([
+        {'selector': 'th', 'props': [('text-align', 'center !important')]},
+        {'selector': 'td', 'props': [('text-align', 'center !important')]}
+    ])
+
+st.title("🚀 Panel de Control Operativo - Certi-Redes (Cloud)")
 
 if df_activa.empty:
-    st.warning("⚠️ La Base General está vacía. Por favor, cargue los archivos de Excel en el panel lateral para iniciar.")
+    st.warning("⚠️ La Base General en la Nube está vacía. Por favor, cargue los archivos de Excel en el panel lateral para crearla.")
 else:
     tab_wa, tab_op, tab_ans, tab_hist = st.tabs([
         "💬 1. Módulo WhatsApp (Agenda)", 
@@ -194,6 +306,7 @@ else:
     # ------------------------------------------
     with tab_wa:
         st.write("### 📅 Generador de Agenda y Mensajería")
+        
         col_f1, col_f2 = st.columns([1, 3])
         with col_f1:
             fecha_select = st.date_input("Seleccione la Fecha de Programación:")
@@ -205,34 +318,41 @@ else:
             if df_agenda_dia.empty:
                 st.info(f"No hay órdenes programadas para el {fecha_select.strftime('%d/%m/%Y')}.")
             else:
-                st.success(f"Se encontraron **{len(df_agenda_dia)}** órdenes para el {fecha_select.strftime('%d/%m/%Y')}.")
-                
-                def marcar_msj_enviado(orden_id):
-                    df_temp = pd.read_csv(ARCHIVO_BASE, dtype=str)
-                    df_temp.loc[df_temp['orden'] == orden_id, 'estado_whatsapp'] = '✅ MSJ ENVIADO'
-                    df_temp.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
-                    st.toast(f"Mensaje marcado como enviado para orden {orden_id}")
+                c_prog = len(df_agenda_dia)
+                c_env = len(df_agenda_dia[df_agenda_dia['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO')])
+                c_conf = len(df_agenda_dia[df_agenda_dia['estado_visita'].astype(str).str.upper().str.contains('CONFIRMADO')])
+                c_canc = len(df_agenda_dia[df_agenda_dia['estado_visita'].astype(str).str.upper().str.contains('CANCELADO')])
 
-                cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'jornada', 'num_vne', 'estado_whatsapp']
+                st.write("#### 📊 Resumen de Mensajería del Día")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("📅 Total Programados", c_prog)
+                m2.metric("📤 Total Enviados", c_env)
+                m3.metric("✅ Confirmados", c_conf)
+                m4.metric("❌ Cancelados", c_canc)
+
+                st.markdown("---")
+                
+                col_btn, _ = st.columns([1, 3])
+                with col_btn:
+                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", use_container_width=True):
+                        ordenes_dia = df_agenda_dia['orden'].tolist()
+                        df_temp = cargar_tabla(TABLA_BASE)
+                        df_temp.loc[df_temp['orden'].isin(ordenes_dia), 'estado_whatsapp'] = '✅ MSJ ENVIADO'
+                        guardar_tabla(df_temp, TABLA_BASE)
+                        st.success("Toda la agenda del día ha sido marcada como 'Enviada' en la Nube.")
+                        st.rerun()
+                
+                st.write("#### 📋 Detalle de la Agenda")
+                cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'jornada', 'num_vne', 'estado_whatsapp', 'estado_visita']
                 columnas_presentes = [c for c in cols_vista if c in df_agenda_dia.columns]
                 
-                # Renderizado SEGURO nativo
-                st.dataframe(df_agenda_dia[columnas_presentes], use_container_width=True)
+                st.dataframe(centrar_df(df_agenda_dia[columnas_presentes]), use_container_width=True)
                 
-                st.markdown("---")
-                st.write("#### Acciones de Mensajería")
-                if st.button("📤 Marcar todas las órdenes del día como 'Mensaje Enviado'", type="primary"):
-                    ordenes_dia = df_agenda_dia['orden'].tolist()
-                    df_temp = pd.read_csv(ARCHIVO_BASE, dtype=str)
-                    df_temp.loc[df_temp['orden'].isin(ordenes_dia), 'estado_whatsapp'] = '✅ MSJ ENVIADO'
-                    df_temp.to_csv(ARCHIVO_BASE, index=False, encoding='utf-8-sig')
-                    st.success("Toda la agenda del día ha sido marcada como 'Enviada'. Esperando confirmación del inspector.")
-                    st.rerun()
         else:
             st.error("La columna de Fecha de Programación no fue encontrada en la base.")
 
     # ------------------------------------------
-    # TAB 2: MONITOR OPERATIVO GENERAL (DISEÑO PARALELO SEGURO)
+    # TAB 2: MONITOR OPERATIVO GENERAL
     # ------------------------------------------
     with tab_op:
         st.write("### 📊 Monitor de Base Activa General")
@@ -257,39 +377,36 @@ else:
 
         with col_der_op:
             st.write("#### 📋 Resúmenes Operativos")
-            
-            # ✨ DISEÑO ESTÉTICO: Sub-pestañas para no saturar la pantalla
             tab_res_tipo, tab_res_muni = st.tabs(["🛠️ Por Tipo de Trabajo", "📍 Por Municipio"])
             
             with tab_res_tipo:
-                if 'tipo_orden' in df_activa.columns:
-                    resumen_op = df_activa.groupby(['tipo_orden', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
-                    for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
-                        if col not in resumen_op.columns: resumen_op[col] = 0
-                    resumen_op['TOTAL'] = resumen_op.iloc[:, 1:].sum(axis=1)
-                    resumen_op.rename(columns={'tipo_orden': 'Tipo Trabajo'}, inplace=True)
-                    resumen_op = resumen_op.sort_values(by='TOTAL', ascending=False)
-                    
-                    st.dataframe(resumen_op, use_container_width=True, hide_index=True)
+                resumen_op = df_activa.groupby(['tipo_orden', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
+                for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
+                    if col not in resumen_op.columns: resumen_op[col] = 0
+                resumen_op['TOTAL'] = resumen_op.iloc[:, 1:].sum(axis=1)
+                resumen_op.rename(columns={'tipo_orden': 'Tipo Trabajo'}, inplace=True)
+                resumen_op = resumen_op.sort_values(by='TOTAL', ascending=False)
+                resumen_op.set_index('Tipo Trabajo', inplace=True)
+                
+                st.table(centrar_df(resumen_op))
             
             with tab_res_muni:
-                if 'municipio' in df_activa.columns:
-                    resumen_muni = df_activa.groupby(['municipio', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
-                    for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
-                        if col not in resumen_muni.columns: resumen_muni[col] = 0
-                    resumen_muni['TOTAL'] = resumen_muni.iloc[:, 1:].sum(axis=1)
-                    resumen_muni.rename(columns={'municipio': 'Municipio'}, inplace=True)
-                    resumen_muni = resumen_muni.sort_values(by='TOTAL', ascending=False)
-                    
-                    st.dataframe(resumen_muni, use_container_width=True, hide_index=True)
+                resumen_muni = df_activa.groupby(['municipio', 'estado_ejecucion']).size().unstack(fill_value=0).reset_index()
+                for col in ['Pendiente', '❌ No efectiva', '✅ Cumplida (Archivada)']:
+                    if col not in resumen_muni.columns: resumen_muni[col] = 0
+                resumen_muni['TOTAL'] = resumen_muni.iloc[:, 1:].sum(axis=1)
+                resumen_muni.rename(columns={'municipio': 'Municipio'}, inplace=True)
+                resumen_muni = resumen_muni.sort_values(by='TOTAL', ascending=False)
+                resumen_muni.set_index('Municipio', inplace=True)
+                
+                st.table(centrar_df(resumen_muni))
 
         st.markdown("---")
         st.write("#### 🗃️ Detalle de Base Activa Completa")
-        # Renderizado SEGURO nativo
-        st.dataframe(df_activa, use_container_width=True)
+        st.dataframe(centrar_df(df_activa), use_container_width=True)
 
     # ------------------------------------------
-    # TAB 3: AUDITORÍA DE TIEMPOS (ANS) (DISEÑO PARALELO SEGURO + GRÁFICO)
+    # TAB 3: AUDITORÍA DE TIEMPOS (ANS)
     # ------------------------------------------
     with tab_ans:
         st.write("### ⏱️ Control de Acuerdos de Nivel de Servicio (Pendientes)")
@@ -387,12 +504,10 @@ else:
                         if c not in resumen_ans.columns: resumen_ans[c] = 0
                     resumen_ans['TOTAL'] = resumen_ans["🔴 VENCIDO"] + resumen_ans["🟡 POR VENCER"] + resumen_ans["🟢 A TIEMPO"]
                     resumen_ans.rename(columns={'tipo_orden': 'Tipo Trabajo'}, inplace=True)
-                    resumen_ans = resumen_ans.sort_values(by='TOTAL', ascending=False)
+                    resumen_ans.set_index('Tipo Trabajo', inplace=True)
                     
-                    # Renderizado SEGURO nativo
-                    st.dataframe(resumen_ans, use_container_width=True, hide_index=True)
+                    st.table(centrar_df(resumen_ans))
                 
-                # GRÁFICO SEGURO
                 st.markdown("---")
                 st.write("#### 📈 Rendimiento Operativo de Tiempos")
                 x_col = "inspector" if "inspector" in df_ans.columns else "tipo_orden"
@@ -421,8 +536,7 @@ else:
                     if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
                     return ''
 
-                # Renderizado SEGURO con colores
-                st.dataframe(df_ans_disp.style.map(style_ans, subset=['Estado']), use_container_width=True, hide_index=True)
+                st.dataframe(centrar_df(df_ans_disp.style.map(style_ans, subset=['Estado'])), use_container_width=True)
             else:
                 st.success("🎉 ¡No hay órdenes bajo seguimiento ANS actualmente!")
         else:
@@ -432,17 +546,17 @@ else:
     # TAB 4: HISTORIAL
     # ------------------------------------------
     with tab_hist:
-        st.write("### 📦 Repositorio de Órdenes Cumplidas y Archivadas")
-        st.info("Aquí reposan todas las órdenes que cruzaron como 'Certificadas' o 'Cumplidas' en GoDoWorks. Estas ya no afectan la Base General.")
-        if os.path.exists(ARCHIVO_HISTORIAL):
-            df_hist_view = pd.read_csv(ARCHIVO_HISTORIAL, dtype=str)
+        st.write("### 📦 Repositorio de Órdenes Cumplidas y Archivadas en la Nube")
+        st.info("Aquí reposan todas las órdenes que cruzaron como 'Certificadas' o 'Cumplidas'. Estas ya no afectan la Base General.")
+        
+        df_hist_view = cargar_tabla(TABLA_HISTORIAL)
+        
+        if not df_hist_view.empty:
             st.metric("Total Órdenes Históricas", len(df_hist_view))
-            
-            # Renderizado SEGURO nativo
-            st.dataframe(df_hist_view, use_container_width=True, hide_index=True)
+            st.dataframe(centrar_df(df_hist_view), use_container_width=True)
             
             buf = io.BytesIO()
             df_hist_view.to_excel(buf, index=False)
             st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", use_container_width=True)
         else:
-            st.info("El historial está vacío. Aún no se han cruzado órdenes cumplidas.")
+            st.info("El historial de la base de datos está vacío. Aún no se han cruzado órdenes cumplidas.")
