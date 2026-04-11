@@ -6,6 +6,8 @@ import plotly.express as px
 import datetime
 from sqlalchemy import create_engine
 import os
+import gc # Limpiador de memoria RAM
+import time # Controlador de tiempos para la subida a la nube
 
 # ==========================================
 # 0. CONSTANTES Y CONFIGURACIÓN
@@ -25,7 +27,8 @@ def init_connection():
         uri = st.secrets["SUPABASE_URI"]
         if "sslmode" not in uri:
             uri += "?sslmode=require"
-        return create_engine(uri)
+        # Ajustamos el pool para que sea más resistente a archivos grandes
+        return create_engine(uri, pool_size=10, max_overflow=20)
     except Exception as e:
         st.error(f"⚠️ Error fatal de conexión a la Base de Datos: {e}")
         st.stop()
@@ -33,29 +36,52 @@ def init_connection():
 engine = init_connection()
 
 # Funciones maestras de Lectura/Escritura a la Nube
-@st.cache_data(ttl=600) # <--- ¡ESTA ES LA MAGIA! Guarda los datos por 10 minutos
+@st.cache_data(ttl=600) # Guarda los datos por 10 minutos
 def cargar_tabla(nombre_tabla):
     """Descarga la tabla desde Supabase a la memoria."""
     try:
         df = pd.read_sql_table(nombre_tabla, engine)
-        return df.astype(str) # Forzamos a texto para mantener la compatibilidad operativa
+        # VITAL: Pasamos todo a minúsculas para evitar KeyErrors por diferencias entre SQL y Pandas
+        df.columns = df.columns.astype(str).str.strip().str.lower()
+        return df.astype(str) 
     except ValueError:
-        # Si da ValueError es porque la tabla aún no existe (está vacía), retornamos un DataFrame vacío
+        # Si da ValueError es porque la tabla aún no existe
         return pd.DataFrame()
     except Exception as e:
         print(f"Error al leer la base de datos ({nombre_tabla}): {e}")
         return pd.DataFrame()
 
 def guardar_tabla(df, nombre_tabla):
-    """Sube y sobrescribe la tabla en Supabase por LOTES para evitar colapso de memoria."""
+    """Sube la tabla a Supabase con control de ancho de banda para evitar WebSocketClosedError."""
     try:
-        print(f"-> Subiendo {len(df)} filas a la nube en bloques de 1000...")
-        # CHUNKSIZE es la magia para que el archivo gigante de 74MB pase sin bloquearse
-        df.to_sql(nombre_tabla, engine, if_exists='replace', index=False, chunksize=1000)
+        print(f"-> Subiendo {len(df)} filas a la nube...")
+        if df.empty:
+            df.to_sql(nombre_tabla, engine, if_exists='replace', index=False)
+            return
+            
+        # 1. Creamos la estructura de la tabla vacía
+        df.head(0).to_sql(nombre_tabla, engine, if_exists='replace', index=False)
+        
+        # 2. Subimos los datos por goteo para no saturar el internet local
+        chunk_size = 500
+        progreso = st.progress(0, text="Iniciando transmisión segura a la nube...")
+        
+        for i in range(0, len(df), chunk_size):
+            chunk = df.iloc[i:i+chunk_size]
+            chunk.to_sql(nombre_tabla, engine, if_exists='append', index=False)
+            
+            # Actualizamos la barra de progreso
+            avance = min((i + len(chunk)) / len(df), 1.0)
+            progreso.progress(avance, text=f"☁️ Subiendo bloque {i//chunk_size + 1}... ({i+len(chunk)}/{len(df)} filas)")
+            
+            # Micro-pausa vital para que Streamlit mantenga viva la conexión y no arroje StreamClosedError
+            time.sleep(0.5) 
+            
         print("-> ¡Subida a la nube exitosa!")
+        st.cache_data.clear() # Limpiamos caché para ver los datos nuevos inmediatamente
     except Exception as e:
         print(f"❌ Error crítico al guardar en la nube: {e}")
-        raise e # Lanza el error para que el detective lo atrape
+        raise e
 
 # Nombres de las tablas en la nube
 TABLA_BASE = 'base_general'
@@ -69,31 +95,52 @@ def normalizar_columnas(df):
     """Limpia y estandariza los nombres de las columnas para evitar errores de espacios."""
     df.columns = df.columns.astype(str).str.strip().str.lower()
     
-    # Aquí unificamos los nombres de su Excel con lo que pide el Dashboard
+    # Unificamos los nombres de su Excel con lo que pide el Dashboard
     mapeo = {
         'orden': 'orden', 'contrato': 'contrato', 'nombre': 'nombre', 
         'dirección': 'direccion', 'direccion': 'direccion', 'telefono': 'telefono',
         'fecha programación': 'fecha_programacion', 'fecha programacion': 'fecha_programacion',
         'jornada': 'jornada', 
         'tipo orden': 'tipo_orden', 
-        'tipo trabajo': 'tipo_trabajo', # <--- ¡EL ERROR ESTABA AQUÍ, YA ESTÁ CORREGIDO!
+        'tipo trabajo': 'tipo_trabajo', 
         'fecha asignación': 'fecha_asignacion', 'fecha asignacion': 'fecha_asignacion', 
         '# vne': 'num_vne', 'consumo': 'consumo', 'meses': 'meses',
         'cabecera': 'municipio', 'cabeceras': 'municipio',
         'nombre técnico': 'inspector', 'estado gestión': 'estado_ejecucion'
     }
     df.rename(columns=mapeo, inplace=True)
+    
+    # Eliminamos copias de columnas para seguridad
+    df = df.loc[:, ~df.columns.duplicated()]
     return df
 
 def procesar_nuevas_bases(archivos_subidos):
-    """Lee los Excels subidos, rechaza las órdenes del historial y actualiza la base en la Nube."""
+    """Lee los Excels/CSV, rechaza órdenes del historial y actualiza la base en la Nube."""
     try:
         print("\n=== INICIANDO PROCESO DE CARGA Y DETECCIÓN ===")
         nuevos_registros = []
         
         for archivo in archivos_subidos:
             print(f"Paso 1: Leyendo el archivo '{archivo.name}'...")
-            df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+            
+            # LÓGICA ROBUSTA PARA CSV (Auto-detecta separadores y encabezados)
+            if archivo.name.lower().endswith('.csv'):
+                contenido = archivo.getvalue().decode('utf-8-sig', errors='replace')
+                sep = ';' if ';' in contenido.split('\n')[0] else ','
+                
+                # Intentamos lectura estándar (fila 0 como encabezado)
+                df_temp = pd.read_csv(io.StringIO(contenido), sep=sep, low_memory=False)
+                
+                # Si no encuentra las columnas, intentamos saltando 4 líneas (formato Excel bruto)
+                columnas_test = df_temp.columns.astype(str).str.strip().str.lower()
+                if 'orden' not in columnas_test and 'contrato' not in columnas_test:
+                    archivo.seek(0)
+                    df_temp = pd.read_csv(io.StringIO(contenido), header=4, sep=sep, low_memory=False)
+            else:
+                if archivo.size > 50 * 1024 * 1024:
+                    st.warning(f"⚠️ El archivo '{archivo.name}' es muy pesado. Recomendamos guardarlo como '.csv' si el proceso falla.")
+                df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+                
             print(f"-> Archivo leído. Filas encontradas: {len(df_temp)}")
             
             print("Paso 2: Normalizando nombres de columnas...")
@@ -106,7 +153,10 @@ def procesar_nuevas_bases(archivos_subidos):
                 df_temp = df_temp[df_temp['orden'] != 'nan'] 
                 nuevos_registros.append(df_temp)
             else:
-                print("❌ ADVERTENCIA: El archivo no tiene columnas 'Orden' o 'Contrato'.")
+                print("❌ ADVERTENCIA: El archivo no tiene columnas 'Orden' o 'Contrato'. Revise el formato.")
+                
+            del df_temp 
+            gc.collect()
 
         if nuevos_registros:
             print("Paso 3: Consolidando los archivos subidos...")
@@ -142,7 +192,7 @@ def procesar_nuevas_bases(archivos_subidos):
                     
             print("Paso 7: Mezclando datos nuevos con la base activa en la Nube...")
             df_base = cargar_tabla(TABLA_BASE)
-            if not df_base.empty:
+            if not df_base.empty and 'orden' in df_base.columns:
                 df_nuevos = df_nuevos.set_index('orden')
                 df_base_index = df_base.set_index('orden')
                 
@@ -164,7 +214,6 @@ def procesar_nuevas_bases(archivos_subidos):
         return False
         
     except Exception as e:
-        # ¡ESTA ES LA TRAMPA PARA EL ERROR SILENCIOSO!
         mensaje_error = f"Tipo de error: {type(e).__name__} | Mensaje: {str(e)}"
         print("\n" + "="*40)
         print("🚨 ¡ALERTA DE FALLO CRÍTICO EN EL MOTOR! 🚨")
@@ -193,7 +242,7 @@ def procesar_godoworks(archivo_godo):
         df_godo[col_contrato] = df_godo[col_contrato].astype(str).str.replace('.0', '', regex=False).str.strip()
         
         df_base = cargar_tabla(TABLA_BASE)
-        if df_base.empty:
+        if df_base.empty or 'contrato' not in df_base.columns:
             st.warning("No hay una Base General activa en la nube para actualizar.")
             return False
             
@@ -238,15 +287,15 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 📥 1. ALIMENTAR BASE GENERAL")
     st.info("Suba sus bases diarias. El sistema rechazará automáticamente las órdenes que ya son Efectivas en la Nube.")
-    archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx)", type=["xlsm", "xlsx"], accept_multiple_files=True)
+    archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx/.csv)", type=["xlsm", "xlsx", "csv"], accept_multiple_files=True)
     if archivos_bases and st.button("🚀 Procesar Bases de Datos", use_container_width=True):
-        with st.spinner("Subiendo datos a Supabase. Mire la terminal de VS Code..."):
+        with st.spinner("Iniciando motor de datos. Por favor, no recargue la página..."):
             resultado = procesar_nuevas_bases(archivos_bases)
             if resultado is True:
                 st.success("¡Base General actualizada en la Nube correctamente!")
                 st.rerun()
             elif isinstance(resultado, str):
-                st.error(resultado) # Ahora mostrará el error exacto en rojo en la pantalla
+                st.error(resultado)
 
     st.markdown("---")
     st.markdown("### 🛠️ 2. ACTUALIZAR EJECUCIÓN (GoDoWorks)")
