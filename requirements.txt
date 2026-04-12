@@ -2,7 +2,6 @@ streamlit
 pandas
 Pillow
 plotly
-twilio
 openpyxl
 SQLAlchemy
 psycopg2-binary
