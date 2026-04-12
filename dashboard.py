@@ -5,7 +5,7 @@ import io
 import plotly.express as px  
 import datetime
 import gc 
-import traceback # Para capturar errores exactos en consola
+import traceback # Para capturar errores exactos en la consola
 
 # IMPORTAMOS NUESTROS NUEVOS MÓDULOS
 from database import cargar_tabla, guardar_tabla
@@ -14,7 +14,7 @@ from whatsapp_module import enviar_mensajes_agenda
 # ==========================================
 # 0. CONSTANTES Y CONFIGURACIÓN
 # ==========================================
-# Fuerza el panel lateral a estar siempre expandido
+# Hace que el panel lateral esté siempre expandido
 st.set_page_config(layout="wide", page_title="Panel Certi-Redes", page_icon="✅", initial_sidebar_state="expanded")
 pd.set_option("styler.render.max_elements", 5000000)
 
@@ -24,7 +24,7 @@ TABLA_INSPECTORES = 'directorio_inspectores'
 
 # --- NUEVO ESCUDO PROTECTOR DE TABLAS ---
 def cargar_tabla_segura(nombre_tabla):
-    """Intenta cargar la tabla. Si la tabla no existe en la nube, atrapa el error y devuelve un DataFrame vacío para no colapsar."""
+    """Intenta cargar la tabla. Si la tabla no existe en la nube, captura el error y devuelve un DataFrame vacío para no colapsar."""
     try:
         df = cargar_tabla(nombre_tabla)
         if isinstance(df, pd.DataFrame):
@@ -39,7 +39,7 @@ def cargar_tabla_segura(nombre_tabla):
 # 1. MOTOR DE PROCESAMIENTO (Bases de datos)
 # ==========================================
 def convertir_fechas_espanol(serie):
-    """Convierte fechas con meses en texto español (ej: 12-abr-26) a formato YYYY-MM-DD."""
+    """Convierte fechas con meses en texto (ej: 12-abr-26) a formato YYYY-MM-DD."""
     s = serie.astype(str).str.lower().str.replace('00:00:00', '', regex=False).str.strip()
     reemplazos = [
         ('ene.', '01'), ('ene', '01'), ('enero', '01'),
@@ -69,7 +69,7 @@ def normalizar_columnas(df):
     # 2. Búsqueda INTELIGENTE por palabras clave (ignora tildes, rombos y espacios raros)
     nuevos_nombres = {}
     for col in df.columns:
-        if col == 'orden': nuevos_nombres[col] = 'orden'
+        if col == 'orden' or col == 'ot': nuevos_nombres[col] = 'orden'
         elif col == 'contrato': nuevos_nombres[col] = 'contrato'
         elif 'nombre' in col and 'tecnic' not in col and 'técnic' not in col: nuevos_nombres[col] = 'nombre'
         elif 'direcc' in col or 'direcci' in col: nuevos_nombres[col] = 'direccion'
@@ -87,13 +87,15 @@ def normalizar_columnas(df):
         elif 'nombre' in col and ('tecnic' in col or 'técnic' in col): nuevos_nombres[col] = 'inspector'
         elif 'estado' in col and ('gestion' in col or 'gestión' in col): nuevos_nombres[col] = 'estado_ejecucion'
         elif 'codigo' in col and ('tecnic' in col or 'técnic' in col): nuevos_nombres[col] = 'codigo_tecnico'
+        # MAPEO DE ESTADO FINAL: Si la columna se llama solo "estado", la mapeamos a "estado_visita"
+        elif col == 'estado' or col == 'estado visita' or col == 'estado de la orden': nuevos_nombres[col] = 'estado_visita'
 
     df.rename(columns=nuevos_nombres, inplace=True)
     return df.loc[:, ~df.columns.duplicated()]
 
 def procesar_nuevas_bases(archivos_subidos):
     """
-    Motor principal. Se agregaron 'prints' para Monitoreo en Consola.
+    Motor principal de carga y actualización cruzando ahora por CONTRATO.
     """
     try:
         print("\n=========================================================")
@@ -106,67 +108,55 @@ def procesar_nuevas_bases(archivos_subidos):
             
             if archivo.name.lower().endswith('.csv'):
                 contenido = archivo.getvalue().decode('utf-8-sig', errors='replace')
+                
+                # --- PARCHE PARA ARCHIVOS DE EJECUCIÓN ---
+                # Elimina las comillas dobles que algunos sistemas usan para encerrar toda la fila
+                contenido = contenido.replace('"', '')
+                
                 sep = ';' if ';' in contenido.split('\n')[0] else ','
-                print(f"🔍 Detectado CSV. Separador: '{sep}'")
                 df_temp = pd.read_csv(io.StringIO(contenido), sep=sep, low_memory=False)
                 columnas_test = df_temp.columns.astype(str).str.strip().str.lower()
-                if 'orden' not in columnas_test and 'contrato' not in columnas_test:
-                    print("⚠️ 'orden' no encontrada en fila 0. Saltando 4 filas (Formato Excel)...")
-                    archivo.seek(0)
+                
+                # Agregamos 'ot' a la validación para que no se salte filas
+                if 'orden' not in columnas_test and 'contrato' not in columnas_test and 'ot' not in columnas_test:
                     df_temp = pd.read_csv(io.StringIO(contenido), header=4, sep=sep, low_memory=False)
             else:
-                print("🔍 Detectado Excel. Leyendo pestaña 'Coordinación' desde fila 4...")
-                df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+                try:
+                    df_temp = pd.read_excel(archivo, sheet_name='Coordinación', header=4, engine='openpyxl')
+                except:
+                    df_temp = pd.read_excel(archivo, header=0, engine='openpyxl')
                 
-            print(f"✅ Lectura inicial completada. Filas encontradas: {len(df_temp)}")
-            
             df_temp = normalizar_columnas(df_temp)
-            print(f"📋 Columnas normalizadas detectadas: {list(df_temp.columns)}")
             
-            if 'orden' in df_temp.columns and 'contrato' in df_temp.columns:
-                print("🟢 ¡Éxito! Columnas 'orden' y 'contrato' encontradas.")
-                df_temp['orden'] = df_temp['orden'].astype(str).str.replace('.0', '', regex=False).str.strip()
+            # --- CAMBIO DE LÓGICA: AHORA UTILIZAMOS EL CONTRATO COMO LLAVE MAESTRA ---
+            if 'contrato' in df_temp.columns:
                 df_temp['contrato'] = df_temp['contrato'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                if 'orden' in df_temp.columns:
+                    df_temp['orden'] = df_temp['orden'].astype(str).str.replace('.0', '', regex=False).str.strip()
                 
-                # Filtro Cazafantasmas
-                filas_antes = len(df_temp)
-                df_temp = df_temp[~df_temp['orden'].isin(['nan', 'None', '', 'NaT', '<NA>', 'null'])]
-                filas_despues = len(df_temp)
-                print(f"👻 Fantasmas eliminados: {filas_antes - filas_despues}. Registros válidos: {filas_despues}")
+                # Filtro Cazafantasmas (ahora por contrato)
+                df_temp = df_temp[~df_temp['contrato'].isin(['nan', 'None', '', 'NaT', '<NA>', 'null'])]
                 
-                if filas_despues > 0:
+                if len(df_temp) > 0:
                     nuevos_registros.append(df_temp)
-                else:
-                    print("⚠️ El archivo quedó vacío tras eliminar los fantasmas (órdenes nulas).")
             else:
-                print("❌ ERROR GRAVE: El archivo no tiene columnas reconocidas como 'orden' o 'contrato'.")
+                print("❌ ERROR GRAVE: El archivo no tiene la columna reconocida como 'contrato'.")
                 
             del df_temp 
             gc.collect()
 
         if nuevos_registros:
-            print("🔗 Consolidando registros válidos...")
             df_nuevos = pd.concat(nuevos_registros, ignore_index=True)
-            
-            print("☁️ Verificando historial en la Nube...")
             df_hist = cargar_tabla_segura(TABLA_HISTORIAL)
             
-            # --- PARCHE 1: Normalizar base histórica al descargar ---
             if not df_hist.empty:
                 df_hist = normalizar_columnas(df_hist)
-            # --------------------------------------------------------
-                
-            if not df_hist.empty and 'orden' in df_hist.columns:
-                filas_antes_hist = len(df_nuevos)
-                df_nuevos = df_nuevos[~df_nuevos['orden'].isin(df_hist['orden'].astype(str).tolist())]
-                print(f"📦 Órdenes repetidas del historial rechazadas: {filas_antes_hist - len(df_nuevos)}")
+                if 'contrato' in df_hist.columns:
+                    df_nuevos = df_nuevos[~df_nuevos['contrato'].isin(df_hist['contrato'].astype(str).tolist())]
             
             if df_nuevos.empty: 
-                print("🏁 Proceso detenido: Todas las órdenes ya están archivadas.")
-                return "❌ Todas las órdenes cargadas ya están cerradas/archivadas en el historial."
+                return "❌ Todos los contratos cargados ya están cerrados/archivados en el historial."
 
-            # PARCHE: Aplicamos la nueva función traductora al cargar los datos
-            print("🗓️ Procesando y limpiando formatos de fechas...")
             if 'fecha_programacion' in df_nuevos.columns:
                 df_nuevos['fecha_prog_limpia'] = convertir_fechas_espanol(df_nuevos['fecha_programacion'])
             if 'fecha_asignacion' in df_nuevos.columns:
@@ -174,30 +164,52 @@ def procesar_nuevas_bases(archivos_subidos):
                 
             for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico']:
                 if col not in df_nuevos.columns:
-                    df_nuevos[col] = 0 if col == 'num_vne' else 'SIN DEFINIR' if col in ['municipio', 'codigo_tecnico'] else 'Pendiente' if col != 'estado_visita' else '⏳ Esperando'
+                    df_nuevos[col] = pd.NA
             
             if 'meses' in df_nuevos.columns: df_nuevos['meses'] = df_nuevos['meses'].astype(str).str.replace('.0', '', regex=False).str.strip()
                     
-            print("☁️ Descargando Base General activa...")
             df_base = cargar_tabla_segura(TABLA_BASE)
             
-            # --- PARCHE 2: Normalizar base activa al descargar ---
             if not df_base.empty:
                 df_base = normalizar_columnas(df_base)
-            # -----------------------------------------------------
                 
-            if not df_base.empty and 'orden' in df_base.columns:
-                print("🔄 Cruzando datos nuevos con los existentes en la nube...")
-                df_nuevos = df_nuevos.set_index('orden')
-                df_base_index = df_base.set_index('orden')
-                cols_exist = [c for c in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'estado_visita'] if c in df_base_index.columns and c in df_nuevos.columns]
+            if not df_base.empty and 'contrato' in df_base.columns:
+                # Eliminamos duplicados por contrato para no romper el índice
+                df_nuevos = df_nuevos.drop_duplicates(subset=['contrato'], keep='last')
+                df_base_index = df_base.drop_duplicates(subset=['contrato'], keep='last')
                 
-                df_nuevos[cols_exist] = df_nuevos[cols_exist].astype(str)
-                df_base_index[cols_exist] = df_base_index[cols_exist].astype(str).replace(['None', 'nan', '<NA>'], 'Pendiente')
-                df_nuevos.update(df_base_index[cols_exist])
+                df_nuevos = df_nuevos.set_index('contrato')
+                df_base_index = df_base_index.set_index('contrato')
                 
-                df_consolidado = pd.concat([df_base[~df_base['orden'].isin(df_nuevos.reset_index()['orden'])], df_nuevos.reset_index()], ignore_index=True)
+                # NUEVA LÓGICA DE CRUCE POR CONTRATO
+                for col in df_base_index.columns:
+                    if col not in df_nuevos.columns:
+                        # Si el nuevo archivo no trae esta columna, conservamos la vieja
+                        df_nuevos[col] = df_base_index[col]
+                    else:
+                        # Llenamos las celdas vacías del nuevo con las del viejo
+                        s_nuevo = df_nuevos[col].replace(['None', 'nan', '', '<NA>'], pd.NA)
+                        s_viejo = df_base_index[col].replace(['None', 'nan', '', '<NA>'], pd.NA)
+                        
+                        if col in ['estado_visita', 'estado_ejecucion']:
+                            s_nuevo = s_nuevo.replace(['Pendiente', 'Pendentes', '⏳ Esperando', '⏳ Agardando'], pd.NA)
+                            df_nuevos[col] = s_nuevo.fillna(s_viejo).fillna('Pendiente')
+                        elif col == 'num_vne':
+                            df_nuevos[col] = s_nuevo.fillna(s_viejo).fillna(0)
+                        elif col == 'estado_whatsapp':
+                            df_nuevos[col] = s_nuevo.fillna(s_viejo)
+                        else:
+                            df_nuevos[col] = s_nuevo.fillna(s_viejo)
+                
+                # Juntamos lo que no se tocó de la base con lo que se actualizó/creó
+                df_consolidado = pd.concat([
+                    df_base_index[~df_base_index.index.isin(df_nuevos.index)].reset_index(),
+                    df_nuevos.reset_index()
+                ], ignore_index=True)
             else:
+                for col in ['estado_visita', 'estado_ejecucion']:
+                    df_nuevos[col] = df_nuevos[col].fillna('Pendiente')
+                df_nuevos['num_vne'] = df_nuevos['num_vne'].fillna(0)
                 df_consolidado = df_nuevos
                 
             print("💾 Guardando consolidado final en la Nube...")
@@ -207,8 +219,7 @@ def procesar_nuevas_bases(archivos_subidos):
             print("=========================================================\n")
             return True
             
-        print("❌ Proceso detenido: No se generó ningún registro nuevo o las columnas estaban mal escritas.")
-        return "❌ Error: El archivo subido no contenía registros válidos o no se detectaron las columnas 'Orden' y 'Contrato'."
+        return "❌ Error: El archivo subido no contenía registros válidos o no se detectó la columna 'contrato'."
         
     except Exception as e:
         print("🚨🚨 ERROR FATAL DETECTADO 🚨🚨")
@@ -229,15 +240,35 @@ def centrar_df(df_o_styler):
         {'selector': 'td', 'props': [('text-align', 'center !important')]}
     ])
 
+# NUEVA FUNCIÓN PARA AÑADIR ICONOS VISUALES
+def formatear_estado_visita(df):
+    """Añade iconos visuales a la columna estado_visita para que resalte más."""
+    df_formateado = df.copy()
+    if 'estado_visita' in df_formateado.columns:
+        def agregar_icono(estado):
+            estado_str = str(estado).upper().strip()
+            if 'CERTIFICADO' in estado_str or 'NO CERTIFICADO' in estado_str:
+                return f"✅ {estado}"
+            elif 'VISITA NO EFECTIVA' in estado_str or 'VNE' in estado_str or 'NO EFECTIVA' in estado_str:
+                return f"❌ {estado}"
+            elif 'PENDIENTE' in estado_str:
+                return f"⏳ {estado}"
+            else:
+                return estado # Devuelve tal cual si no coincide
+        
+        df_formateado['estado_visita'] = df_formateado['estado_visita'].apply(agregar_icono)
+    return df_formateado
+
+
 with st.sidebar:
     try: st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
     except: st.write("### CERTI-REDES")
     st.markdown("🟢 **Nube Activa**")
     st.markdown("---")
     
-    st.markdown("### 📥 1. ALIMENTAR BASE GENERAL")
-    archivos_bases = st.file_uploader("Bases diarias (.csv, .xlsx)", accept_multiple_files=True, key="side_uploader")
-    if archivos_bases and st.button("🚀 Procesar", use_container_width=True, key="side_btn"):
+    st.markdown("### 📥 1. CARGA DE BASE GENERAL")
+    archivos_bases = st.file_uploader("Suba su matriz original (.csv, .xlsx)", accept_multiple_files=True, key="side_uploader")
+    if archivos_bases and st.button("🚀 Cargar a la Nube", use_container_width=True, key="side_btn"):
         with st.spinner("Limpiando y subiendo... Mire la consola/logs para ver los detalles."):
             res = procesar_nuevas_bases(archivos_bases)
             if res is True:
@@ -248,16 +279,12 @@ with st.sidebar:
 
 df_activa = cargar_tabla_segura(TABLA_BASE)
 
-# --- PARCHE 3: NORMALIZAR LA BASE PARA LA PANTALLA ---
+# --- NORMALIZAR LA BASE PARA LA PANTALLA ---
 if not df_activa.empty:
     df_activa = normalizar_columnas(df_activa)
-# -------------------------------------------------------
 
 st.title("🚀 Panel Certi-Redes (Cloud)")
 
-# =========================================================================
-# NUEVA MEJORA DE INTERFAZ: Si la base está vacía, pone el cargador al medio
-# =========================================================================
 if df_activa.empty:
     st.warning("⚠️ La base de datos está vacía actualmente.")
     st.info("👆 Para habilitar todos los módulos, por favor cargue su primera base de datos aquí abajo:")
@@ -274,38 +301,66 @@ if df_activa.empty:
                 st.error(res)
 else:
     # Si la base tiene datos, muestra los módulos normales
-    t_wa, t_op, t_ans, t_hist, t_insp = st.tabs(["💬 WhatsApp", "📊 Monitor", "⏱️ ANS", "📦 Historial", "⚙️ Inspectores"])
+    t_wa, t_op, t_ans, t_hist, t_insp = st.tabs(["💬 Operación Diaria", "📊 Monitor", "⏱️ ANS", "📦 Historial", "⚙️ Inspectores"])
 
     with t_wa:
-        st.write("### 📅 Generador de Agenda y Mensajería Automática")
+        st.write("### 📅 Centro de Mando Operativo")
         
-        col_f1, col_f2 = st.columns([1, 3])
+        # --- NUEVA ESTRUCTURA SUPERIOR: FECHA Y CARGA DE EJECUCIÓN ---
+        col_f1, col_f2 = st.columns([1, 2])
+        
         with col_f1:
             fecha_select = st.date_input("Seleccione la Fecha de Programación:")
             f_str = fecha_select.strftime('%Y-%m-%d')
+            
+        with col_f2:
+            with st.expander("⬆️ Actualizar Ejecución (Suba aquí el archivo con la columna 'ESTADO' y 'CONTRATO')", expanded=False):
+                archivos_ejec = st.file_uploader("Suba el Excel de los inspectores para actualizar Efectivas/VNE:", accept_multiple_files=True, key="up_ejec")
+                if archivos_ejec and st.button("🔄 Procesar y Actualizar Estados", use_container_width=True):
+                    with st.spinner("Cruzando datos (por Contrato) y actualizando tablero..."):
+                        res = procesar_nuevas_bases(archivos_ejec)
+                        if res is True:
+                            st.success("¡Estados de ejecución actualizados!")
+                            st.rerun()
+                        else:
+                            st.error(res)
         
         if 'fecha_programacion' in df_activa.columns:
             df_activa['fecha_prog_limpia'] = convertir_fechas_espanol(df_activa['fecha_programacion'])
             df_dia = df_activa[df_activa['fecha_prog_limpia'] == f_str]
             
             if not df_dia.empty:
+                # --- CÁLCULO DE MÉTRICAS ---
                 c_prog = len(df_dia)
-                # AQUÍ ESTÁ LA CORRECCIÓN DEL CONTADOR: Parámetro na=False para ignorar celdas vacías/flotantes
                 c_env = len(df_dia[df_dia['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]) if 'estado_whatsapp' in df_dia.columns else 0
+                c_no_env = c_prog - c_env
                 
-                st.write("#### 📊 Resumen de Mensajería del Día")
-                m1, m2 = st.columns(2)
+                estados_upper = df_dia['estado_visita'].astype(str).str.upper().str.strip()
+                
+                # Efectivas: Suma tanto CERTIFICADO como NO CERTIFICADO
+                mask_efectivas = estados_upper.isin(['CERTIFICADO', 'NO CERTIFICADO'])
+                c_cert = len(df_dia[mask_efectivas])
+                
+                # No Efectivas: VISITA NO EFECTIVA (o sus abreviaciones)
+                mask_vne = estados_upper.str.contains('VISITA NO EFECTIVA', na=False) | estados_upper.isin(['VNE', 'NO EFECTIVA'])
+                c_vne = len(df_dia[mask_vne])
+                
+                c_pend = c_prog - c_cert - c_vne
+                
+                st.write("---")
+                
+                # --- FILA 1: MENSAJERÍA ---
+                st.markdown("#### 📱 1. Gestión de Mensajería WhatsApp")
+                m1, m2, m3, btn_col = st.columns([1, 1, 1, 2])
                 m1.metric("📅 Total Programados", c_prog)
                 m2.metric("📤 Total Enviados", c_env)
-                
-                col_btn, _ = st.columns([1, 3])
-                with col_btn:
-                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", use_container_width=True):
+                m3.metric("⏳ No Enviados", c_no_env)
+                with btn_col:
+                    st.write("") # Espaciador
+                    if st.button("📤 Disparar Mensajes Pendientes", type="primary", use_container_width=True):
                         with st.spinner("Verificando credenciales y conectando con Twilio..."):
-                            # VALIDACIÓN PREVIA DE SECRETOS EN LA INTERFAZ
                             if "TWILIO_ACCOUNT_SID" not in st.secrets:
-                                st.error("🚨 ERROR CRÍTICO: No se encontraron las credenciales de Twilio en los 'Secrets' de la nube.")
-                                st.info("👉 Vaya a Streamlit Cloud -> Settings -> Secrets y asegúrese de que TWILIO_ACCOUNT_SID esté escrito correctamente.")
+                                st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
                                 exito, msj = enviar_mensajes_agenda(df_dia)
                                 if exito:
@@ -313,13 +368,73 @@ else:
                                     st.rerun()
                                 else:
                                     st.error(msj)
+
+                st.write("---")
                 
-                st.write("#### 📋 Detalle de la Agenda (Con Códigos y Celulares cruzados)")
-                cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'municipio', 'fecha_programacion', 'jornada', 'inspector', 'codigo_tecnico', 'estado_whatsapp']
+                # --- FILA 2 Y 3: EFECTIVIDAD Y JORNADAS ---
+                col_efect, col_jornada = st.columns(2)
+                
+                with col_efect:
+                    st.markdown("#### 🛠️ 2. Efectividad de Visitas")
+                    e1, e2, e3 = st.columns(3)
+                    e1.metric("✅ Efectivas (Cert/No Cert)", c_cert)
+                    e2.metric("❌ No Efectivas (VNE)", c_vne)
+                    e3.metric("⏳ Pendientes", c_pend)
+                    
+                with col_jornada:
+                    st.markdown("#### ⏱️ 3. Control de Jornada (Vencimientos)")
+                    
+                    # Lógica de cálculo de jornadas AM/PM
+                    hoy = datetime.date.today()
+                    hora_actual = datetime.datetime.now().hour
+                    
+                    jornada_am = df_dia[df_dia['jornada'].astype(str).str.upper().str.contains('AM', na=False)]
+                    jornada_pm = df_dia[df_dia['jornada'].astype(str).str.upper().str.contains('PM', na=False)]
+                    
+                    def calc_jornada(df_j, es_am):
+                        if df_j.empty: return 0, 0, 0
+                        est = df_j.loc[:, 'estado_visita'].astype(str).str.upper().str.strip()
+                        
+                        # Actualizamos la fórmula para que cuente ambas como Ejecutadas
+                        mask_ef = est.isin(['CERTIFICADO', 'NO CERTIFICADO'])
+                        mask_vn = est.str.contains('VISITA NO EFECTIVA', na=False) | est.isin(['VNE', 'NO EFECTIVA'])
+                        
+                        cumplidos = len(df_j[mask_ef | mask_vn])
+                        pendientes = len(df_j) - cumplidos
+                        vencidos = 0
+                        
+                        # Si es un día en el pasado, todo lo pendiente está vencido
+                        if fecha_select < hoy:
+                            vencidos = pendientes
+                        # Si es hoy, evaluamos la hora
+                        elif fecha_select == hoy:
+                            if es_am and hora_actual >= 12:
+                                vencidos = pendientes
+                            elif not es_am and hora_actual >= 18:
+                                vencidos = pendientes
+                        return len(df_j), cumplidos, vencidos
+
+                    am_tot, am_cump, am_venc = calc_jornada(jornada_am, True)
+                    pm_tot, pm_cump, pm_venc = calc_jornada(jornada_pm, False)
+                    
+                    j1, j2, j3, j4 = st.columns(4)
+                    j1.metric("☀️ AM Ejecut.", f"{am_cump}/{am_tot}")
+                    # Mostramos en ROJO (- inverse) si hay vencidos
+                    j2.metric("☀️ AM Venc.", am_venc, delta=f"-{am_venc} Venc." if am_venc > 0 else None, delta_color="inverse")
+                    j3.metric("🌙 PM Ejecut.", f"{pm_cump}/{pm_tot}")
+                    j4.metric("🌙 PM Venc.", pm_venc, delta=f"-{pm_venc} Venc." if pm_venc > 0 else None, delta_color="inverse")
+
+                st.write("---")
+                
+                st.write("#### 📋 Base Detallada de la Jornada")
+                cols_vista = ['orden', 'contrato', 'nombre', 'municipio', 'fecha_programacion', 'jornada', 'inspector', 'estado_visita', 'estado_whatsapp']
                 columnas_presentes = [c for c in cols_vista if c in df_dia.columns]
-                st.dataframe(centrar_df(df_dia[columnas_presentes]), use_container_width=True)
+                
+                # APLICAMOS EL NUEVO FORMATEO VISUAL A LA TABLA
+                df_visual = formatear_estado_visita(df_dia[columnas_presentes])
+                st.dataframe(centrar_df(df_visual), use_container_width=True)
             else:
-                st.info(f"Sin agenda para el día {fecha_select.strftime('%d/%m/%Y')}.")
+                st.info(f"Sin agenda u operación registrada para el día {fecha_select.strftime('%d/%m/%Y')}.")
                 fechas_disp = df_activa['fecha_prog_limpia'].dropna().unique()
                 fechas_disp = [f for f in fechas_disp if str(f) not in ['nan', 'NaT', 'None', '']]
                 if len(fechas_disp) > 0:
@@ -329,8 +444,11 @@ else:
             st.error("No se detectó la columna 'fecha_programacion' en la base de datos.")
 
     with t_op:
-        st.write("### 📊 Monitor Operativo")
-        st.dataframe(centrar_df(df_activa), use_container_width=True)
+        st.write("### 📊 Monitor Operativo General")
+        
+        # APLICAMOS EL NUEVO FORMATEO VISUAL AL MONITOR GENERAL TAMBIÉN
+        df_activa_visual = formatear_estado_visita(df_activa)
+        st.dataframe(centrar_df(df_activa_visual), use_container_width=True)
 
     with t_ans:
         st.write("### ⏱️ Control ANS")
