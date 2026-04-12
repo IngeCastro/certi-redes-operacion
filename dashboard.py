@@ -152,7 +152,11 @@ def procesar_nuevas_bases(archivos_subidos):
                 print("-> Limpiando columnas clave (Orden y Contrato)...")
                 df_temp['orden'] = df_temp['orden'].astype(str).str.replace('.0', '', regex=False).str.strip()
                 df_temp['contrato'] = df_temp['contrato'].astype(str).str.replace('.0', '', regex=False).str.strip()
-                df_temp = df_temp[df_temp['orden'] != 'nan'] 
+                
+                # === EL FILTRO CAZAFANTASMAS ===
+                # Destruye cualquier fila donde la orden esté vacía, nula, o diga "nan"
+                df_temp = df_temp[~df_temp['orden'].isin(['nan', 'None', '', 'NaT', '<NA>', 'null'])]
+                
                 nuevos_registros.append(df_temp)
             else:
                 print("❌ ADVERTENCIA: El archivo no tiene columnas 'Orden' o 'Contrato'. Revise el formato.")
