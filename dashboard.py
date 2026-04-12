@@ -280,3 +280,4 @@ else:
                     st.rerun()
         with c2:
             if not df_insp.empty: st.dataframe(centrar_df(df_insp), use_container_width=True)
+            # prueba Jorge
