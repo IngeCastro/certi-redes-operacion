@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 import gc
 
 @st.cache_resource
@@ -21,6 +21,11 @@ engine = init_connection()
 @st.cache_data(ttl=600)
 def cargar_tabla(nombre_tabla):
     try:
+        # RADAR: Revisa si la tabla exacta existe ANTES de buscarla y estrellarse
+        inspector = inspect(engine)
+        if not inspector.has_table(nombre_tabla):
+            return pd.DataFrame() # Si no existe (o hay error de mayúsculas), devuelve vacío en paz
+        
         df = pd.read_sql_table(nombre_tabla, engine)
         df.columns = df.columns.astype(str).str.strip().str.lower()
         return df.astype(str)
