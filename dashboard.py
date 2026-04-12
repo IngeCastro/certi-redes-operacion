@@ -25,6 +25,11 @@ def init_connection():
     try:
         # Se conecta usando el secreto guardado en su bóveda .streamlit/secrets.toml
         uri = st.secrets["SUPABASE_URI"]
+        
+        # PARCHE DE SEGURIDAD: SQLAlchemy exige que diga 'postgresql://', no 'postgres://'
+        if uri.startswith("postgres://"):
+            uri = uri.replace("postgres://", "postgresql://", 1)
+            
         if "sslmode" not in uri:
             uri += "?sslmode=require"
         # Ajustamos el pool para que sea más resistente a archivos grandes
@@ -302,8 +307,7 @@ with st.sidebar:
     archivos_bases = st.file_uploader("Seleccionar Bases (.xlsm/.xlsx/.csv)", type=["xlsm", "xlsx", "csv"], accept_multiple_files=True)
     st.write("")
     
-    # ACTUALIZADO: use_container_width a width='stretch'
-    if archivos_bases and st.button("🚀 Procesar Bases de Datos", width="stretch"):
+    if archivos_bases and st.button("🚀 Procesar Bases de Datos", use_container_width=True):
         with st.spinner("Iniciando motor de datos. Por favor, no recargue la página..."):
             resultado = procesar_nuevas_bases(archivos_bases)
             if resultado is True:
@@ -322,8 +326,7 @@ with st.sidebar:
     archivo_godo = st.file_uploader("Subir reporte GoDoWorks", type=["csv", "xlsx"])
     st.write("")
     
-    # ACTUALIZADO: use_container_width a width='stretch'
-    if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", width="stretch"):
+    if archivo_godo and st.button("🔄 Ejecutar Cruce Automático", use_container_width=True):
         with st.spinner("Sincronizando estados en la Nube..."):
             if procesar_godoworks(archivo_godo):
                 st.success("¡Cruce realizado! Órdenes actualizadas y/o archivadas en la Nube.")
@@ -412,8 +415,7 @@ else:
                 
                 col_btn, _ = st.columns([1, 3])
                 with col_btn:
-                    # ACTUALIZADO: use_container_width a width='stretch'
-                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", width="stretch"):
+                    if st.button("📤 Enviar Mensajes a la Agenda del Día", type="primary", use_container_width=True):
                         ordenes_dia = df_agenda_dia['orden'].tolist()
                         df_temp = cargar_tabla(TABLA_BASE)
                         df_temp.loc[df_temp['orden'].isin(ordenes_dia), 'estado_whatsapp'] = '✅ MSJ ENVIADO'
@@ -426,7 +428,7 @@ else:
                 cols_vista = ['orden', 'contrato', 'nombre', 'direccion', 'telefono', 'jornada', 'num_vne', 'estado_whatsapp', 'estado_visita']
                 columnas_presentes = [c for c in cols_vista if c in df_agenda_dia.columns]
                 
-                st.dataframe(centrar_df(df_agenda_dia[columnas_presentes]), width="stretch")
+                st.dataframe(centrar_df(df_agenda_dia[columnas_presentes]), use_container_width=True)
                 
         else:
             st.error("La columna de Fecha de Programación no fue encontrada en la base.")
@@ -489,7 +491,7 @@ else:
         st.markdown("---")
         st.write("")
         st.write("#### 🗃️ Detalle de Base Activa Completa")
-        st.dataframe(centrar_df(df_activa), width="stretch")
+        st.dataframe(centrar_df(df_activa), use_container_width=True)
 
     # ------------------------------------------
     # TAB 3: AUDITORÍA DE TIEMPOS (ANS)
@@ -605,7 +607,7 @@ else:
                 fig_ans = px.bar(df_ans, x=x_col, color="Estado ANS", 
                                 title=f"Distribución de Órdenes ({x_col.replace('_', ' ').title()})",
                                 color_discrete_map={"🔴 VENCIDO": "#c62828", "🟡 POR VENCER": "#f57f17", "🟢 A TIEMPO": "#2e7d32"})
-                st.plotly_chart(fig_ans, width="stretch")
+                st.plotly_chart(fig_ans, use_container_width=True)
 
                 st.write("")
                 st.markdown("---")
@@ -628,7 +630,7 @@ else:
                     if 'A TIEMPO' in str(val): return 'background-color: #e8f5e9; color: #2e7d32;'
                     return ''
 
-                st.dataframe(centrar_df(df_ans_disp.style.map(style_ans, subset=['Estado'])), width="stretch")
+                st.dataframe(centrar_df(df_ans_disp.style.map(style_ans, subset=['Estado'])), use_container_width=True)
             else:
                 st.success("🎉 ¡No hay órdenes bajo seguimiento ANS actualmente!")
         else:
@@ -648,11 +650,11 @@ else:
         if not df_hist_view.empty:
             st.metric("Total Órdenes Históricas", len(df_hist_view))
             st.write("")
-            st.dataframe(centrar_df(df_hist_view), width="stretch")
+            st.dataframe(centrar_df(df_hist_view), use_container_width=True)
             
             buf = io.BytesIO()
             df_hist_view.to_excel(buf, index=False)
             st.write("")
-            st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", width="stretch")
+            st.download_button("📥 Descargar Historial Completo (Excel)", buf.getvalue(), "historial_completo.xlsx", use_container_width=True)
         else:
             st.info("El historial de la base de datos está vacío. Aún no se han cruzado órdenes cumplidas.")
