@@ -23,20 +23,68 @@ TABLA_INSPECTORES = 'directorio_inspectores'
 # ==========================================
 # 1. MOTOR DE PROCESAMIENTO (Bases de datos)
 # ==========================================
+def convertir_fechas_espanol(serie):
+    """Convierte fechas con meses en texto español (ej: 12-abr-26) a formato YYYY-MM-DD."""
+    s = serie.astype(str).str.lower().str.replace('00:00:00', '', regex=False).str.strip()
+    reemplazos = [
+        ('ene.', '01'), ('ene', '01'), ('enero', '01'),
+        ('feb.', '02'), ('feb', '02'), ('febrero', '02'),
+        ('mar.', '03'), ('mar', '03'), ('marzo', '03'),
+        ('abr.', '04'), ('abr', '04'), ('abril', '04'),
+        ('may.', '05'), ('may', '05'), ('mayo', '05'),
+        ('jun.', '06'), ('jun', '06'), ('junio', '06'),
+        ('jul.', '07'), ('jul', '07'), ('julio', '07'),
+        ('ago.', '08'), ('ago', '08'), ('agosto', '08'),
+        ('sep.', '09'), ('sep', '09'), ('septiembre', '09'),
+        ('oct.', '10'), ('oct', '10'), ('octubre', '10'),
+        ('nov.', '11'), ('nov', '11'), ('noviembre', '11'),
+        ('dic.', '12'), ('dic', '12'), ('diciembre', '12')
+    ]
+    for texto, num in reemplazos:
+        s = s.str.replace(f'-{texto}-', f'-{num}-', regex=False)
+        s = s.str.replace(f'/{texto}/', f'/{num}/', regex=False)
+        s = s.str.replace(f' {texto} ', f'-{num}-', regex=False)
+    return pd.to_datetime(s, dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+
 def normalizar_columnas(df):
-    df.columns = df.columns.astype(str).str.strip().str.lower()
+    # 1. Limpiar espacios dobles ocultos
+    cols = df.columns.astype(str).str.strip().str.lower().str.replace(r'\s+', ' ', regex=True)
+    
+    # 2. DESTRUCTOR DE ROMBOS Y TILDES: Convierte símbolos raros a letras planas
+    cols = cols.str.replace('', 'o').str.replace('ó', 'o').str.replace('á', 'a')
+    cols = cols.str.replace('é', 'e').str.replace('í', 'i').str.replace('ú', 'u')
+    df.columns = cols
+
+    # 3. Mapeo ultra-limpio (como ya no hay tildes ni rombos, la búsqueda es perfecta)
     mapeo = {
-        'orden': 'orden', 'contrato': 'contrato', 'nombre': 'nombre', 
-        'dirección': 'direccion', 'direccion': 'direccion', 'telefono': 'telefono',
-        'fecha programación': 'fecha_programacion', 'fecha programacion': 'fecha_programacion',
-        'jornada': 'jornada', 'tipo orden': 'tipo_orden', 'tipo trabajo': 'tipo_trabajo', 
-        'fecha asignación': 'fecha_asignacion', 'fecha asignacion': 'fecha_asignacion', 
-        '# vne': 'num_vne', 'consumo': 'consumo', 'meses': 'meses',
-        'cabecera': 'municipio', 'cabeceras': 'municipio',
-        'nombre técnico': 'inspector', 'estado gestión': 'estado_ejecucion',
-        'codigo tecnico': 'codigo_tecnico', 'código técnico': 'codigo_tecnico'
+        'orden': 'orden', 
+        'contrato': 'contrato', 
+        'nombre': 'nombre', 
+        'direccion': 'direccion', 
+        'telefono': 'telefono',
+        'fecha programacion': 'fecha_programacion',
+        'jornada': 'jornada', 
+        'tipo orden': 'tipo_orden', 
+        'tipo trabajo': 'tipo_trabajo', 
+        'fecha asignacion': 'fecha_asignacion', 
+        '# vne': 'num_vne', 
+        'consumo': 'consumo', 
+        'meses': 'meses',
+        'cabecera': 'municipio', 
+        'cabeceras': 'municipio',
+        'nombre tecnico': 'inspector', 
+        'estado gestion': 'estado_ejecucion',
+        'codigo tecnico': 'codigo_tecnico'
     }
     df.rename(columns=mapeo, inplace=True)
+    
+    # 4. SALVAVIDAS FINAL: Si por alguna razón la columna sigue oculta, busca las palabras clave
+    for col in df.columns:
+        if 'programacion' in col and 'fecha' in col and col != 'fecha_programacion':
+            df.rename(columns={col: 'fecha_programacion'}, inplace=True)
+        elif 'asignacion' in col and 'fecha' in col and col != 'fecha_asignacion':
+            df.rename(columns={col: 'fecha_asignacion'}, inplace=True)
+
     return df.loc[:, ~df.columns.duplicated()]
 
 def procesar_nuevas_bases(archivos_subidos):
@@ -67,15 +115,22 @@ def procesar_nuevas_bases(archivos_subidos):
         if nuevos_registros:
             df_nuevos = pd.concat(nuevos_registros, ignore_index=True)
             df_hist = cargar_tabla(TABLA_HISTORIAL)
+            
+            # --- PARCHE 1: Normalizar base histórica al descargar ---
+            if not df_hist.empty:
+                df_hist = normalizar_columnas(df_hist)
+            # --------------------------------------------------------
+                
             if not df_hist.empty and 'orden' in df_hist.columns:
                 df_nuevos = df_nuevos[~df_nuevos['orden'].isin(df_hist['orden'].astype(str).tolist())]
             
             if df_nuevos.empty: return "Las órdenes cargadas ya están cerradas/archivadas."
 
+            # PARCHE: Aplicamos la nueva función traductora al cargar los datos
             if 'fecha_programacion' in df_nuevos.columns:
-                df_nuevos['fecha_prog_limpia'] = pd.to_datetime(df_nuevos['fecha_programacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+                df_nuevos['fecha_prog_limpia'] = convertir_fechas_espanol(df_nuevos['fecha_programacion'])
             if 'fecha_asignacion' in df_nuevos.columns:
-                df_nuevos['fecha_asignacion'] = pd.to_datetime(df_nuevos['fecha_asignacion'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+                df_nuevos['fecha_asignacion'] = convertir_fechas_espanol(df_nuevos['fecha_asignacion'])
                 
             for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico']:
                 if col not in df_nuevos.columns:
@@ -84,6 +139,12 @@ def procesar_nuevas_bases(archivos_subidos):
             if 'meses' in df_nuevos.columns: df_nuevos['meses'] = df_nuevos['meses'].astype(str).str.replace('.0', '', regex=False).str.strip()
                     
             df_base = cargar_tabla(TABLA_BASE)
+            
+            # --- PARCHE 2: Normalizar base activa al descargar ---
+            if not df_base.empty:
+                df_base = normalizar_columnas(df_base)
+            # -----------------------------------------------------
+                
             if not df_base.empty and 'orden' in df_base.columns:
                 df_nuevos = df_nuevos.set_index('orden')
                 df_base_index = df_base.set_index('orden')
@@ -134,19 +195,33 @@ with st.sidebar:
                 st.error(res)
 
 df_activa = cargar_tabla(TABLA_BASE)
+
+# --- PARCHE 3: NORMALIZAR LA BASE PARA LA PANTALLA ---
+# Asegura que "fecha programación" cambie a "fecha_programacion" al instante
+if not df_activa.empty:
+    df_activa = normalizar_columnas(df_activa)
+# -------------------------------------------------------
+
 st.title("🚀 Panel Certi-Redes (Cloud)")
 
+# AQUÍ ESTABA EL ERROR: Reparado el bloque if/else
 if df_activa.empty:
-    st.warning("⚠️ La base de datos está vacía. Cargue archivos.")
+    st.warning("⚠️ La base de datos está vacía. Cargue archivos en el panel lateral.")
 else:
     t_wa, t_op, t_ans, t_hist, t_insp = st.tabs(["💬 WhatsApp", "📊 Monitor", "⏱️ ANS", "📦 Historial", "⚙️ Inspectores"])
 
     with t_wa:
         st.write("### 📅 Agenda y Envíos Twilio")
-        f_str = st.date_input("Fecha de Programación:").strftime('%Y-%m-%d')
+        fecha_select = st.date_input("Fecha de Programación:")
+        f_str = fecha_select.strftime('%Y-%m-%d')
         
-        if 'fecha_prog_limpia' in df_activa.columns:
+        # --- APLICAMOS LA FUNCIÓN MAESTRA DE FECHAS A LA VISTA ACTUAL ---
+        if 'fecha_programacion' in df_activa.columns:
+            # Rescatamos las fechas perdidas procesándolas directo de la columna original "fecha_programacion"
+            df_activa['fecha_prog_limpia'] = convertir_fechas_espanol(df_activa['fecha_programacion'])
+            
             df_dia = df_activa[df_activa['fecha_prog_limpia'] == f_str]
+            
             if not df_dia.empty:
                 st.metric("Total Programados", len(df_dia))
                 if st.button("📤 Enviar Mensajes a la Agenda", type="primary"):
@@ -159,7 +234,16 @@ else:
                             st.error(msj)
                 st.dataframe(centrar_df(df_dia), use_container_width=True)
             else:
-                st.info("Sin agenda para este día.")
+                st.info(f"Sin agenda para el día {fecha_select.strftime('%d/%m/%Y')}.")
+                
+                # RADAR DIAGNÓSTICO
+                fechas_disp = df_activa['fecha_prog_limpia'].dropna().unique()
+                fechas_disp = [f for f in fechas_disp if str(f) not in ['nan', 'NaT', 'None', '']]
+                if len(fechas_disp) > 0:
+                    st.warning("🕵️ **El sistema encontró estas fechas disponibles en su base general:**")
+                    st.code(", ".join(sorted(fechas_disp)[:20]))
+        else:
+            st.error("No se detectó la columna 'fecha_programacion' en la base de datos.")
 
     with t_op:
         st.write("### 📊 Monitor Operativo")
@@ -173,7 +257,9 @@ else:
     with t_hist:
         st.write("### 📦 Historial")
         df_h = cargar_tabla(TABLA_HISTORIAL)
-        if not df_h.empty: st.dataframe(centrar_df(df_h), use_container_width=True)
+        if not df_h.empty: 
+            df_h = normalizar_columnas(df_h)
+            st.dataframe(centrar_df(df_h), use_container_width=True)
 
     with t_insp:
         st.write("### ⚙️ Directorio de Inspectores")
@@ -182,7 +268,9 @@ else:
         with c1:
             with st.form("f_insp"):
                 f_cod = st.text_input("Código Técnico (Ej: 321)")
-                f_ced, f_nom, f_cel = st.text_input("Cédula"), st.text_input("Nombre"), st.text_input("Celular (Sin +57)")
+                f_ced = st.text_input("Cédula")
+                f_nom = st.text_input("Nombre")
+                f_cel = st.text_input("Celular (Sin +57)")
                 if st.form_submit_button("Guardar"):
                     nuevo = pd.DataFrame([{'codigo_tecnico': f_cod.strip(), 'cedula': f_ced.strip(), 'nombre': f_nom.strip(), 'celular': f_cel.strip()}])
                     if not df_insp.empty:
