@@ -211,6 +211,13 @@ def procesar_nuevas_bases(archivos_subidos):
                     df_nuevos[col] = df_nuevos[col].fillna('Pendiente')
                 df_nuevos['num_vne'] = df_nuevos['num_vne'].fillna(0)
                 df_consolidado = df_nuevos
+            
+            # --- PARCHE DE LIMPIEZA DE DUPLICADOS ANTES DE GUARDAR ---
+            if 'contrato' in df_consolidado.columns:
+                filas_antes = len(df_consolidado)
+                df_consolidado = df_consolidado.drop_duplicates(subset=['contrato'], keep='last')
+                filas_despues = len(df_consolidado)
+                print(f"🧹 Duplicados eliminados antes de guardar: {filas_antes - filas_despues}")
                 
             print("💾 Guardando consolidado final en la Nube...")
             guardar_tabla(df_consolidado, TABLA_BASE)
@@ -259,6 +266,15 @@ def formatear_estado_visita(df):
         df_formateado['estado_visita'] = df_formateado['estado_visita'].apply(agregar_icono)
     return df_formateado
 
+# FUNCIÓN PARA DESCARGAR EXCEL
+def convertir_df_a_excel(df):
+    output = io.BytesIO()
+    # Usamos openpyxl como motor para escribir Excel
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Base_General')
+    processed_data = output.getvalue()
+    return processed_data
+
 
 with st.sidebar:
     try: st.image(Image.open('Logo_CertiRedes_Transparente.png'), width=200)
@@ -282,6 +298,9 @@ df_activa = cargar_tabla_segura(TABLA_BASE)
 # --- NORMALIZAR LA BASE PARA LA PANTALLA ---
 if not df_activa.empty:
     df_activa = normalizar_columnas(df_activa)
+    # Limpiamos duplicados en pantalla si los hubiera de cargas pasadas
+    if 'contrato' in df_activa.columns:
+        df_activa = df_activa.drop_duplicates(subset=['contrato'], keep='last')
 
 st.title("🚀 Panel Certi-Redes (Cloud)")
 
@@ -444,8 +463,20 @@ else:
             st.error("No se detectó la columna 'fecha_programacion' en la base de datos.")
 
     with t_op:
-        st.write("### 📊 Monitor Operativo General")
-        
+        col_tit, col_desc = st.columns([3, 1])
+        with col_tit:
+            st.write("### 📊 Monitor Operativo General")
+        with col_desc:
+            # BOTÓN DE DESCARGA HABILITADO
+            excel_data = convertir_df_a_excel(df_activa)
+            st.download_button(
+                label="📥 Descargar Base Completa",
+                data=excel_data,
+                file_name=f"Base_General_CertiRedes_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+            
         # APLICAMOS EL NUEVO FORMATEO VISUAL AL MONITOR GENERAL TAMBIÉN
         df_activa_visual = formatear_estado_visita(df_activa)
         st.dataframe(centrar_df(df_activa_visual), use_container_width=True)
@@ -465,14 +496,72 @@ else:
     with t_insp:
         st.write("### ⚙️ Directorio de Inspectores")
         df_insp = cargar_tabla_segura(TABLA_INSPECTORES)
+        
+        # --- NUEVO: CARGA MASIVA DE INSPECTORES ---
+        with st.expander("⬆️ Carga Masiva de Inspectores (Excel/CSV)", expanded=False):
+            st.info("Suba un archivo con las columnas: Código Técnico, Cédula, Nombre, Celular.")
+            archivo_insp = st.file_uploader("Subir base de técnicos", type=['csv', 'xlsx'], key="up_insp")
+            
+            if archivo_insp and st.button("🚀 Procesar y Guardar Directorio", use_container_width=True):
+                with st.spinner("Cruzando y actualizando base de inspectores..."):
+                    try:
+                        # Leer archivo
+                        if archivo_insp.name.lower().endswith('.csv'):
+                            cont_insp = archivo_insp.getvalue().decode('utf-8-sig', errors='replace')
+                            sep_insp = ';' if ';' in cont_insp.split('\n')[0] else ','
+                            df_nuevo_insp = pd.read_csv(io.StringIO(cont_insp), sep=sep_insp, dtype=str)
+                        else:
+                            df_nuevo_insp = pd.read_excel(archivo_insp, dtype=str)
+                        
+                        # Normalizar columnas
+                        cols_insp = df_nuevo_insp.columns.astype(str).str.strip().str.lower()
+                        df_nuevo_insp.columns = cols_insp
+                        
+                        # Mapeo inteligente de columnas
+                        map_insp = {}
+                        for c in cols_insp:
+                            if 'codigo' in c or 'código' in c or 'cod' in c: map_insp[c] = 'codigo_tecnico'
+                            elif 'cedula' in c or 'cédula' in c or 'identificacion' in c: map_insp[c] = 'cedula'
+                            elif 'nombre' in c or 'tecnico' in c or 'técnico' in c: map_insp[c] = 'nombre'
+                            elif 'celular' in c or 'telefono' in c or 'teléfono' in c: map_insp[c] = 'celular'
+                        
+                        df_nuevo_insp.rename(columns=map_insp, inplace=True)
+                        
+                        if 'codigo_tecnico' in df_nuevo_insp.columns:
+                            # Limpieza básica
+                            df_nuevo_insp['codigo_tecnico'] = df_nuevo_insp['codigo_tecnico'].astype(str).str.replace('.0', '', regex=False).str.strip()
+                            df_nuevo_insp = df_nuevo_insp[~df_nuevo_insp['codigo_tecnico'].isin(['nan', 'None', '', '<NA>'])]
+                            
+                            if not df_nuevo_insp.empty:
+                                if not df_insp.empty:
+                                    # Unir con la base existente y quitar duplicados dejando el más reciente
+                                    df_final_insp = pd.concat([df_insp, df_nuevo_insp], ignore_index=True)
+                                    df_final_insp = df_final_insp.drop_duplicates(subset=['codigo_tecnico'], keep='last')
+                                else:
+                                    df_final_insp = df_nuevo_insp
+                                
+                                guardar_tabla(df_final_insp, TABLA_INSPECTORES)
+                                st.success(f"¡Directorio actualizado con éxito! Se procesaron {len(df_nuevo_insp)} registros.")
+                                st.rerun()
+                            else:
+                                st.warning("El archivo no contenía códigos válidos.")
+                        else:
+                            st.error("❌ El archivo no tiene una columna reconocible para el 'Código Técnico'.")
+                    except Exception as e:
+                        st.error(f"Error al procesar el archivo: {str(e)}")
+
+        st.write("---")
+        
+        # --- VISTA ORIGINAL Y REGISTRO MANUAL ---
         c1, c2 = st.columns([1, 2])
         with c1:
+            st.write("#### ✍️ Registro Individual")
             with st.form("f_insp"):
                 f_cod = st.text_input("Código Técnico (Ej: 321)")
                 f_ced = st.text_input("Cédula")
                 f_nom = st.text_input("Nombre")
                 f_cel = st.text_input("Celular (Sin +57)")
-                if st.form_submit_button("Guardar"):
+                if st.form_submit_button("Guardar Técnico"):
                     nuevo = pd.DataFrame([{'codigo_tecnico': f_cod.strip(), 'cedula': f_ced.strip(), 'nombre': f_nom.strip(), 'celular': f_cel.strip()}])
                     if not df_insp.empty:
                         df_final = pd.concat([df_insp[df_insp['codigo_tecnico'] != f_cod.strip()], nuevo], ignore_index=True)
@@ -480,4 +569,5 @@ else:
                     guardar_tabla(df_final, TABLA_INSPECTORES)
                     st.rerun()
         with c2:
+            st.write("#### 📋 Listado Actual")
             if not df_insp.empty: st.dataframe(centrar_df(df_insp), use_container_width=True)
