@@ -6,6 +6,10 @@ import plotly.express as px
 import datetime
 import gc 
 import traceback # Para capturar errores exactos en la consola
+import warnings # Para silenciar advertencias de rendimiento
+
+# Apagamos todas las advertencias rojas molestas de Pandas en la consola
+warnings.filterwarnings('ignore')
 
 # IMPORTAMOS NUESTROS NUEVOS MÓDULOS
 from database import cargar_tabla, guardar_tabla
@@ -39,8 +43,14 @@ def cargar_tabla_segura(nombre_tabla):
 # 1. MOTOR DE PROCESAMIENTO (Bases de datos)
 # ==========================================
 def convertir_fechas_espanol(serie):
-    """Convierte fechas con meses en texto (ej: 12-abr-26) a formato YYYY-MM-DD."""
-    s = serie.astype(str).str.lower().str.replace('00:00:00', '', regex=False).str.strip()
+    """Convierte fechas a formato estandarizado YYYY-MM-DD con doble motor."""
+    # 1. Limpieza extrema: fuera Nones y basuras
+    s = serie.astype(str).replace({'None': '', 'nan': '', '<NA>': '', 'NaT': '', 'NaN': ''}).str.strip()
+    
+    # 2. Quitar horas y espacios extra (ej: "2026-04-13 00:00:00" -> "2026-04-13")
+    s = s.str.split(' ').str[0]
+    
+    # 3. Traductor de meses a números
     reemplazos = [
         ('ene.', '01'), ('ene', '01'), ('enero', '01'),
         ('feb.', '02'), ('feb', '02'), ('febrero', '02'),
@@ -55,11 +65,21 @@ def convertir_fechas_espanol(serie):
         ('nov.', '11'), ('nov', '11'), ('noviembre', '11'),
         ('dic.', '12'), ('dic', '12'), ('diciembre', '12')
     ]
+    s_lower = s.str.lower()
     for texto, num in reemplazos:
-        s = s.str.replace(f'-{texto}-', f'-{num}-', regex=False)
-        s = s.str.replace(f'/{texto}/', f'/{num}/', regex=False)
-        s = s.str.replace(f' {texto} ', f'-{num}-', regex=False)
-    return pd.to_datetime(s, dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+        s_lower = s_lower.str.replace(f'-{texto}-', f'-{num}-', regex=False)
+        s_lower = s_lower.str.replace(f'/{texto}/', f'/{num}/', regex=False)
+        
+    # 4. PARSEO INTELIGENTE "DOBLE MOTOR"
+    # Motor 1: Intenta formato universal (YYYY-MM-DD) ideal para Excel
+    res = pd.to_datetime(s_lower, errors='coerce')
+    
+    # Motor 2: Lo que falló (NaT), lo intenta en formato latino (DD/MM/YYYY)
+    mask_nat = res.isna() & (s_lower != '')
+    if mask_nat.any():
+        res[mask_nat] = pd.to_datetime(s_lower[mask_nat], errors='coerce', dayfirst=True)
+        
+    return res.dt.strftime('%Y-%m-%d')
 
 def normalizar_columnas(df):
     # 1. Bajar a minúsculas y quitar espacios extra a los lados
@@ -218,7 +238,13 @@ def procesar_nuevas_bases(archivos_subidos):
                 df_consolidado = df_consolidado.drop_duplicates(subset=['contrato'], keep='last')
                 filas_despues = len(df_consolidado)
                 print(f"🧹 Duplicados eliminados antes de guardar: {filas_antes - filas_despues}")
-                
+            
+            # --- EL EXORCISTA DE LOS "NONES" ANTES DE GUARDAR EN LA NUBE ---
+            print("🧼 Limpiando textos nulos y fantasmas para la Base de Datos...")
+            df_consolidado = df_consolidado.replace({'None': '', 'nan': '', '<NA>': '', 'NaT': '', 'NaN': ''})
+            df_consolidado = df_consolidado.fillna('')
+            # ---------------------------------------------------------------
+            
             print("💾 Guardando consolidado final en la Nube...")
             guardar_tabla(df_consolidado, TABLA_BASE)
             print("=========================================================")
@@ -298,9 +324,17 @@ df_activa = cargar_tabla_segura(TABLA_BASE)
 # --- NORMALIZAR LA BASE PARA LA PANTALLA ---
 if not df_activa.empty:
     df_activa = normalizar_columnas(df_activa)
+    
+    # Exorcizamos los "Nones" viejos que vienen arrastrados de la base de datos
+    df_activa = df_activa.replace({'None': '', 'nan': '', '<NA>': '', 'NaT': '', 'NaN': ''}).fillna('')
+    
     # Limpiamos duplicados en pantalla si los hubiera de cargas pasadas
     if 'contrato' in df_activa.columns:
         df_activa = df_activa.drop_duplicates(subset=['contrato'], keep='last')
+        
+    # Aplicamos el limpiador de fechas también para que el calendario lo lea bien
+    if 'fecha_programacion' in df_activa.columns:
+        df_activa['fecha_prog_limpia'] = convertir_fechas_espanol(df_activa['fecha_programacion'])
 
 st.title("🚀 Panel Certi-Redes (Cloud)")
 
@@ -345,7 +379,6 @@ else:
                             st.error(res)
         
         if 'fecha_programacion' in df_activa.columns:
-            df_activa['fecha_prog_limpia'] = convertir_fechas_espanol(df_activa['fecha_programacion'])
             df_dia = df_activa[df_activa['fecha_prog_limpia'] == f_str]
             
             if not df_dia.empty:
