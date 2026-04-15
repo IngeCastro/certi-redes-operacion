@@ -454,6 +454,13 @@ else:
                     
                 with col_jornada:
                     st.markdown("#### 🚦 3. Control de Jornada (Semáforo ANS)")
+                    
+                    # --- NUEVO: OBTENER LA HORA EXACTA DE COLOMBIA (UTC-5) ---
+                    # Esto evita que el servidor en la nube se adelante 5 horas
+                    hora_colombia = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
+                    hoy = hora_colombia.date()
+                    hora_actual = hora_colombia.hour
+                    
                     jornada_am = df_filtrado[df_filtrado['jornada'].astype(str).str.upper().str.contains('AM', na=False)]
                     jornada_pm = df_filtrado[df_filtrado['jornada'].astype(str).str.upper().str.contains('PM', na=False)]
                     
@@ -464,14 +471,16 @@ else:
                         pendientes = len(df_j) - cumplidos
                         vencidos = 0
                         
-                        # LÓGICA DEL SEMÁFORO:
+                        # LÓGICA DEL SEMÁFORO (CON HORARIO DE COLOMBIA):
                         if fecha_select < hoy: 
                             vencidos = pendientes
                         elif fecha_select == hoy:
-                            if es_am and hora_actual >= 12: 
-                                vencidos = pendientes # AM vence a las 12pm
-                            elif not es_am and hora_actual >= 17: 
-                                vencidos = pendientes # PM vence a las 5pm (17:00)
+                            # AM vence a las 13:00 (1:00 PM) para dar margen de reporte
+                            if es_am and hora_actual >= 13: 
+                                vencidos = pendientes 
+                            # PM vence a las 18:00 (6:00 PM)
+                            elif not es_am and hora_actual >= 18: 
+                                vencidos = pendientes 
                                 
                         return len(df_j), cumplidos, vencidos
 
@@ -494,6 +503,34 @@ else:
                     j4.metric("PM Vencidas", pm_venc, delta=f"-{pm_venc} Vencidas" if pm_venc > 0 else None, delta_color="inverse")
 
                 st.write("---")
+                
+                # --- ACTUALIZACIÓN DE LA FUNCIÓN DE ETIQUETADO PARA LA TABLA ---
+                def evaluar_ans_fila(row):
+                    est = str(row.get('estado_puro', '')).upper()
+                    jornada = str(row.get('jornada', '')).upper()
+                    
+                    es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est
+                    if es_ejecutada:
+                        return "✅ Ejecutada"
+                        
+                    es_am = 'AM' in jornada
+                    
+                    if fecha_select < hoy:
+                        return "🔴 AM Vencida" if es_am else "🔴 PM Vencida"
+                    elif fecha_select == hoy:
+                        # AM vence a las 13:00 (1:00 PM)
+                        if es_am and hora_actual >= 13:
+                            return "🔴 AM Vencida"
+                        # PM vence a las 18:00 (6:00 PM)
+                        elif not es_am and hora_actual >= 18:
+                            return "🔴 PM Vencida"
+                        else:
+                            return "🟡 En Tiempo"
+                    else:
+                        return "🟡 En Tiempo"
+
+                df_filtrado['estado_ans'] = df_filtrado.apply(evaluar_ans_fila, axis=1)
+                # -----------------------------------------------------------
                 
                 col_tab1, col_tab2 = st.columns([4, 1])
                 with col_tab1:
