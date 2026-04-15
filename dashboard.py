@@ -380,8 +380,10 @@ else:
                 elif filtro_estado == "PENDIENTES": df_filtrado = df_filtrado[df_filtrado['estado_puro'].isin(['PENDIENTE', '⏳ ESPERANDO', 'NAN', ''])]
                 
                 # --- NUEVA LÓGICA PARA ETIQUETAR CADA FILA (ESTADO ANS) ---
-                hoy = datetime.date.today()
-                hora_actual = datetime.datetime.now().hour
+                # AQUI HACEMOS EL AJUSTE DE ZONA HORARIA A COLOMBIA (UTC-5)
+                hora_colombia = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
+                hoy = hora_colombia.date()
+                hora_actual = hora_colombia.hour
                 
                 def evaluar_ans_fila(row):
                     est = str(row.get('estado_puro', '')).upper()
@@ -397,9 +399,9 @@ else:
                     if fecha_select < hoy:
                         return "🔴 AM Vencida" if es_am else "🔴 PM Vencida"
                     elif fecha_select == hoy:
-                        if es_am and hora_actual >= 12:
+                        if es_am and hora_actual >= 13: # <-- 13:00 (1 PM)
                             return "🔴 AM Vencida"
-                        elif not es_am and hora_actual >= 17:
+                        elif not es_am and hora_actual >= 17: # <-- 17:00 (5 PM)
                             return "🔴 PM Vencida"
                         else:
                             return "🟡 En Tiempo"
@@ -472,8 +474,8 @@ else:
                             # AM vence a las 13:00 (1:00 PM) para dar margen de reporte
                             if es_am and hora_actual >= 13: 
                                 vencidos = pendientes 
-                            # PM vence a las 18:00 (6:00 PM)
-                            elif not es_am and hora_actual >= 18: 
+                            # PM vence a las 17:00 (5:00 PM)
+                            elif not es_am and hora_actual >= 17: 
                                 vencidos = pendientes 
                                 
                         return len(df_j), cumplidos, vencidos
