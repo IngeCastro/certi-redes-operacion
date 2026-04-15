@@ -387,6 +387,7 @@ else:
                     est = str(row.get('estado_puro', '')).upper()
                     jornada = str(row.get('jornada', '')).upper()
                     
+                    # AQUÍ SE AÑADIÓ 'PROGRAMADA' PARA QUE QUEDE COMO EJECUTADA ✅
                     es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est or 'PROGRAMADA' in est
                     if es_ejecutada:
                         return "✅ Ejecutada"
@@ -496,34 +497,6 @@ else:
                     j4.metric("PM Vencidas", pm_venc, delta=f"-{pm_venc} Vencidas" if pm_venc > 0 else None, delta_color="inverse")
 
                 st.write("---")
-                
-                # --- ACTUALIZACIÓN DE LA FUNCIÓN DE ETIQUETADO PARA LA TABLA ---
-                def evaluar_ans_fila(row):
-                    est = str(row.get('estado_puro', '')).upper()
-                    jornada = str(row.get('jornada', '')).upper()
-                    
-                    es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est
-                    if es_ejecutada:
-                        return "✅ Ejecutada"
-                        
-                    es_am = 'AM' in jornada
-                    
-                    if fecha_select < hoy:
-                        return "🔴 AM Vencida" if es_am else "🔴 PM Vencida"
-                    elif fecha_select == hoy:
-                        # AM vence a las 13:00 (1:00 PM)
-                        if es_am and hora_actual >= 13:
-                            return "🔴 AM Vencida"
-                        # PM vence a las 18:00 (6:00 PM)
-                        elif not es_am and hora_actual >= 18:
-                            return "🔴 PM Vencida"
-                        else:
-                            return "🟡 En Tiempo"
-                    else:
-                        return "🟡 En Tiempo"
-
-                df_filtrado['estado_ans'] = df_filtrado.apply(evaluar_ans_fila, axis=1)
-                # -----------------------------------------------------------
                 
                 col_tab1, col_tab2 = st.columns([4, 1])
                 with col_tab1:
