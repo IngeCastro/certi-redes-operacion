@@ -268,7 +268,7 @@ def formatear_estado_visita(df):
             estado_str = str(estado).upper().strip()
             if 'CERTIFICADO' in estado_str or 'NO CERTIFICADO' in estado_str:
                 return f"✅ {estado}"
-            elif 'VISITA NO EFECTIVA' in estado_str or 'VNE' in estado_str or 'NO EFECTIVA' in estado_str:
+            elif 'VISITA NO EFECTIVA' in estado_str or 'VNE' in estado_str or 'NO EFECTIVA' in estado_str or 'PROGRAMADA' in estado_str:
                 return f"❌ {estado}"
             elif 'PENDIENTE' in estado_str:
                 return f"⏳ {estado}"
@@ -376,7 +376,7 @@ else:
                 if filtro_muni != "Todos": df_filtrado = df_filtrado[df_filtrado['municipio'] == filtro_muni]
                 if filtro_insp != "Todos": df_filtrado = df_filtrado[df_filtrado['inspector'] == filtro_insp]
                 if filtro_estado == "EFECTIVAS (Certificadas/No Certificadas)": df_filtrado = df_filtrado[df_filtrado['estado_puro'].isin(['CERTIFICADO', 'NO CERTIFICADO'])]
-                elif filtro_estado == "NO EFECTIVAS (VNE)": df_filtrado = df_filtrado[df_filtrado['estado_puro'].str.contains('VISITA NO EFECTIVA', na=False) | df_filtrado['estado_puro'].isin(['VNE', 'NO EFECTIVA'])]
+                elif filtro_estado == "NO EFECTIVAS (VNE)": df_filtrado = df_filtrado[df_filtrado['estado_puro'].str.contains('VISITA NO EFECTIVA', na=False) | df_filtrado['estado_puro'].isin(['VNE', 'NO EFECTIVA', 'PROGRAMADA'])]
                 elif filtro_estado == "PENDIENTES": df_filtrado = df_filtrado[df_filtrado['estado_puro'].isin(['PENDIENTE', '⏳ ESPERANDO', 'NAN', ''])]
                 
                 # --- NUEVA LÓGICA PARA ETIQUETAR CADA FILA (ESTADO ANS) ---
@@ -387,7 +387,7 @@ else:
                     est = str(row.get('estado_puro', '')).upper()
                     jornada = str(row.get('jornada', '')).upper()
                     
-                    es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est
+                    es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est or 'PROGRAMADA' in est
                     if es_ejecutada:
                         return "✅ Ejecutada"
                         
@@ -416,7 +416,7 @@ else:
                 estados_filtrados = df_filtrado['estado_puro']
                 mask_efectivas = estados_filtrados.isin(['CERTIFICADO', 'NO CERTIFICADO'])
                 c_cert = len(df_filtrado[mask_efectivas])
-                mask_vne = estados_filtrados.str.contains('VISITA NO EFECTIVA', na=False) | estados_filtrados.isin(['VNE', 'NO EFECTIVA'])
+                mask_vne = estados_filtrados.str.contains('VISITA NO EFECTIVA', na=False) | estados_filtrados.isin(['VNE', 'NO EFECTIVA', 'PROGRAMADA'])
                 c_vne = len(df_filtrado[mask_vne])
                 c_pend = c_prog - c_cert - c_vne
                 
@@ -454,24 +454,17 @@ else:
                     
                 with col_jornada:
                     st.markdown("#### 🚦 3. Control de Jornada (Semáforo ANS)")
-                    
-                    # --- NUEVO: OBTENER LA HORA EXACTA DE COLOMBIA (UTC-5) ---
-                    # Esto evita que el servidor en la nube se adelante 5 horas
-                    hora_colombia = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
-                    hoy = hora_colombia.date()
-                    hora_actual = hora_colombia.hour
-                    
                     jornada_am = df_filtrado[df_filtrado['jornada'].astype(str).str.upper().str.contains('AM', na=False)]
                     jornada_pm = df_filtrado[df_filtrado['jornada'].astype(str).str.upper().str.contains('PM', na=False)]
                     
                     def calc_jornada(df_j, es_am):
                         if df_j.empty: return 0, 0, 0
                         est = df_j.loc[:, 'estado_puro']
-                        cumplidos = len(df_j[est.isin(['CERTIFICADO', 'NO CERTIFICADO']) | (est.str.contains('VISITA NO EFECTIVA', na=False) | est.isin(['VNE', 'NO EFECTIVA']))])
+                        cumplidos = len(df_j[est.isin(['CERTIFICADO', 'NO CERTIFICADO']) | (est.str.contains('VISITA NO EFECTIVA', na=False) | est.isin(['VNE', 'NO EFECTIVA', 'PROGRAMADA']))])
                         pendientes = len(df_j) - cumplidos
                         vencidos = 0
                         
-                        # LÓGICA DEL SEMÁFORO (CON HORARIO DE COLOMBIA):
+                        # LÓGICA DEL SEMÁFORO:
                         if fecha_select < hoy: 
                             vencidos = pendientes
                         elif fecha_select == hoy:
