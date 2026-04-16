@@ -317,8 +317,8 @@ if not df_activa.empty:
 st.title("🚀 Panel Certi-Redes (Cloud)")
 
 if df_activa.empty:
-    st.warning("⚠️ La base de datos está vacía actualmente.")
-    st.info("👆 Para habilitar todos los módulos, por favor cargue su primera base de datos aquí abajo:")
+    st.warning("⚠️ La base de datos está vacía actualmente o la conexión a la Nube está cargando.")
+    st.info("👆 Si es su primera vez, cargue su base de datos. Si ya tenía datos guardados, espere unos segundos o presione F5 para refrescar la conexión.")
     st.write("---")
     
     archivos_bases_main = st.file_uploader("Arrastre su archivo Excel o CSV aquí:", accept_multiple_files=True, key="main_uploader")
@@ -379,7 +379,7 @@ else:
                 elif filtro_estado == "NO EFECTIVAS (VNE)": df_filtrado = df_filtrado[df_filtrado['estado_puro'].str.contains('VISITA NO EFECTIVA', na=False) | df_filtrado['estado_puro'].isin(['VNE', 'NO EFECTIVA', 'PROGRAMADA'])]
                 elif filtro_estado == "PENDIENTES": df_filtrado = df_filtrado[df_filtrado['estado_puro'].isin(['PENDIENTE', '⏳ ESPERANDO', 'NAN', ''])]
                 
-                # --- NUEVA LÓGICA PARA ETIQUETAR CADA FILA (ESTADO ANS) ---
+                # --- LÓGICA PARA ETIQUETAR CADA FILA (ESTADO ANS) ---
                 # AQUI HACEMOS EL AJUSTE DE ZONA HORARIA A COLOMBIA (UTC-5)
                 hora_colombia = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
                 hoy = hora_colombia.date()
@@ -389,7 +389,7 @@ else:
                     est = str(row.get('estado_puro', '')).upper()
                     jornada = str(row.get('jornada', '')).upper()
                     
-                    # AQUÍ SE AÑADIÓ 'PROGRAMADA' PARA QUE QUEDE COMO EJECUTADA ✅
+                    # AQUÍ ESTÁ 'PROGRAMADA' PARA QUE QUEDE COMO EJECUTADA ✅
                     es_ejecutada = 'CERTIFICADO' in est or 'VNE' in est or 'NO EFECTIVA' in est or 'PROGRAMADA' in est
                     if es_ejecutada:
                         return "✅ Ejecutada"

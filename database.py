@@ -9,7 +9,7 @@ import time # Para el sistema de reintentos
 # =====================================================================
 # Cambie esto a True cuando esté desarrollando en su PC para no dañar la BD real.
 # CAMBIELO A False ANTES DE SINCRONIZAR A GITHUB (Para que la web use la real).
-MODO_PRUEBA = True 
+MODO_PRUEBA = False 
 # =====================================================================
 
 @st.cache_resource
@@ -23,7 +23,15 @@ def init_connection():
             
         connect_args = {'options': '-c statement_timeout=120000'}
         
-        return create_engine(uri, pool_size=10, max_overflow=20, connect_args=connect_args)
+        # NUEVO: Agregamos pool_pre_ping y pool_recycle como "despertadores" de conexión
+        return create_engine(
+            uri, 
+            pool_size=10, 
+            max_overflow=20, 
+            connect_args=connect_args,
+            pool_pre_ping=True,  # Verifica si la conexión está viva antes de usarla
+            pool_recycle=1800    # Recicla las conexiones viejas cada 30 minutos
+        )
     except Exception as e:
         st.error(f"⚠️ Error fatal de conexión a la Base de Datos: {e}")
         st.stop()
@@ -48,7 +56,10 @@ def cargar_tabla(nombre_tabla):
         df = pd.read_sql_table(tabla_real, engine)
         df.columns = df.columns.astype(str).str.strip().str.lower()
         return df.astype(str)
-    except Exception:
+    except Exception as e:
+        # NUEVO: Ahora mostrará si hay un error real en vez de ocultarlo y fingir que está vacía
+        print(f"❌ Error interno al cargar {tabla_real}: {e}")
+        st.error(f"⚠️ Error al conectar con la Nube. La tabla '{tabla_real}' no respondió. Intente recargar la página (F5).")
         return pd.DataFrame()
 
 def guardar_tabla(df, nombre_tabla, reintentos=3):
