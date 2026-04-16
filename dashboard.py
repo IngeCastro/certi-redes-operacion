@@ -236,7 +236,10 @@ def procesar_nuevas_bases(archivos_subidos):
     except Exception as e:
         print("🚨🚨 ERROR FATAL DETECTADO 🚨🚨")
         print(traceback.format_exc())
-        return f"Error fatal interno del sistema: {str(e)}"
+        error_msg = str(e)
+        if "Tenant or user not found" in error_msg:
+            error_msg += "\n\n💡 DIAGNÓSTICO DEL INGENIERO: \n1) Streamlit Cloud se quedó pegado con la clave vieja. Use el nuevo botón 'Forzar Reconexión' arriba.\n2) Si su contraseña tiene un arroba '@', cámbielo por '%40' en sus Secrets."
+        return f"Error fatal interno del sistema: {error_msg}"
 
 # ==========================================
 # 2. INTERFAZ GRÁFICA (UI)
@@ -319,6 +322,16 @@ st.title("🚀 Panel Certi-Redes (Cloud)")
 if df_activa.empty:
     st.warning("⚠️ La base de datos está vacía actualmente o la conexión a la Nube está cargando.")
     st.info("👆 Si es su primera vez, cargue su base de datos. Si ya tenía datos guardados, espere unos segundos o presione F5 para refrescar la conexión.")
+    
+    # --- NUEVO BOTÓN DE RECONEXIÓN PARA PURGAR LA CACHÉ ---
+    col_btn1, col_btn2 = st.columns([1, 2])
+    with col_btn1:
+        if st.button("🔄 Forzar Reconexión a la Nube", help="Limpia la memoria caché y obliga a la app a leer las contraseñas nuevas."):
+            st.cache_resource.clear()
+            st.cache_data.clear()
+            st.rerun()
+    # --------------------------------------------------------
+
     st.write("---")
     
     archivos_bases_main = st.file_uploader("Arrastre su archivo Excel o CSV aquí:", accept_multiple_files=True, key="main_uploader")
