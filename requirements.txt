@@ -5,4 +5,5 @@ plotly
 openpyxl
 SQLAlchemy
 psycopg2-binary
+matplotlib
 twilio
