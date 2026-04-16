@@ -9,7 +9,7 @@ import time # Para el sistema de reintentos
 # =====================================================================
 # Cambie esto a True cuando esté desarrollando en su PC para no dañar la BD real.
 # CAMBIELO A False ANTES DE SINCRONIZAR A GITHUB (Para que la web use la real).
-MODO_PRUEBA = False 
+MODO_PRUEBA = True 
 # =====================================================================
 
 @st.cache_resource
