@@ -439,23 +439,44 @@ else:
                 st.write("---")
                 
                 st.markdown("#### 📱 1. Gestión de Mensajería WhatsApp")
-                m1, m2, m3, btn_col = st.columns([1, 1, 1, 2])
+                m1, m2, m3 = st.columns(3)
                 m1.metric("📅 Total Programados", c_prog)
                 m2.metric("📤 Total Enviados", c_env)
                 m3.metric("⏳ No Enviados", c_no_env)
-                with btn_col:
-                    st.write("") 
-                    if st.button("📤 Disparar Mensajes Pendientes (De la tabla actual)", type="primary", use_container_width=True):
-                        with st.spinner("Verificando credenciales y conectando con Twilio..."):
+                
+                st.write("#### 🚀 Acciones Masivas")
+                col_btn_prog, col_btn_sanc = st.columns(2)
+                
+                with col_btn_prog:
+                    if st.button("☀️ Enviar Programación (Mañana)", type="primary", use_container_width=True):
+                        with st.spinner("Conectando con Twilio para Programaciones..."):
                             if "TWILIO_ACCOUNT_SID" not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
-                                exito, msj = enviar_mensajes_agenda(df_filtrado) 
+                                exito, msj = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
                                 if exito:
                                     st.success(msj)
                                     st.rerun()
                                 else:
                                     st.error(msj)
+                                    
+                with col_btn_sanc:
+                    if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", use_container_width=True):
+                        with st.spinner("Generando Sanciones en Rojo y Enviando Correo..."):
+                            if "TWILIO_ACCOUNT_SID" not in st.secrets:
+                                st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
+                            else:
+                                # Filtramos para enviar sanción SOLO a los que tienen estado "Pendiente"
+                                df_pendientes = df_filtrado[df_filtrado['estado_puro'].isin(['PENDIENTE', '⏳ ESPERANDO', 'NAN', ''])]
+                                if df_pendientes.empty:
+                                    st.info("No hay órdenes pendientes para sancionar.")
+                                else:
+                                    exito, msj = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
+                                    if exito:
+                                        st.success(msj)
+                                        st.rerun()
+                                    else:
+                                        st.error(msj)
 
                 st.write("---")
                 
