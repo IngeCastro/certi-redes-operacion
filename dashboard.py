@@ -425,9 +425,27 @@ else:
                 df_filtrado['estado_ans'] = df_filtrado.apply(evaluar_ans_fila, axis=1)
                 # -----------------------------------------------------------
 
+                # === NUEVA LÓGICA DE CONTADORES SEPARADOS (ÓRDENES VS MENSAJES) ===
                 c_prog = len(df_filtrado)
-                c_env = len(df_filtrado[df_filtrado['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]) if 'estado_whatsapp' in df_filtrado.columns else 0
-                c_no_env = c_prog - c_env
+                
+                if 'estado_whatsapp' in df_filtrado.columns:
+                    # Filtramos los que ya tienen marca de ENVIADO
+                    df_enviados = df_filtrado[df_filtrado['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]
+                    c_ordenes_env = len(df_enviados)
+                    
+                    # Contamos los inspectores únicos para saber cuántos mensajes reales salieron
+                    if 'codigo_tecnico' in df_enviados.columns:
+                        c_mensajes_env = df_enviados['codigo_tecnico'].nunique()
+                    elif 'inspector' in df_enviados.columns:
+                        c_mensajes_env = df_enviados['inspector'].nunique()
+                    else:
+                        c_mensajes_env = 0
+                else:
+                    c_ordenes_env = 0
+                    c_mensajes_env = 0
+                    
+                c_no_env = c_prog - c_ordenes_env
+                # ==================================================================
                 
                 estados_filtrados = df_filtrado['estado_puro']
                 mask_efectivas = estados_filtrados.isin(['CERTIFICADO', 'NO CERTIFICADO'])
@@ -439,10 +457,12 @@ else:
                 st.write("---")
                 
                 st.markdown("#### 📱 1. Gestión de Mensajería WhatsApp")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("📅 Total Programados", c_prog)
-                m2.metric("📤 Total Enviados", c_env)
-                m3.metric("⏳ No Enviados", c_no_env)
+                # Ampliamos a 4 columnas para que quepan ambos contadores
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("📅 Órdenes Programadas", c_prog)
+                m2.metric("📦 Órdenes Enviadas", c_ordenes_env, help="Total de órdenes individuales notificadas")
+                m3.metric("📨 Mensajes Enviados", c_mensajes_env, help="Total de WhatsApps agrupados enviados a inspectores")
+                m4.metric("⏳ Órdenes Pendientes", c_no_env)
                 
                 st.write("#### 🚀 Acciones Masivas")
                 col_btn_prog, col_btn_sanc = st.columns(2)
@@ -450,20 +470,22 @@ else:
                 with col_btn_prog:
                     if st.button("☀️ Enviar Programación (Mañana)", type="primary", use_container_width=True):
                         with st.spinner("Conectando con Twilio para Programaciones..."):
-                            if "TWILIO_ACCOUNT_SID" not in st.secrets:
+                            if "META_ACCESS_TOKEN" not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
-                                exito, msj = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
+                                exito, msj, df_reporte = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
                                 if exito:
                                     st.success(msj)
-                                    st.rerun()
+                                    st.dataframe(df_reporte, use_container_width=True)
                                 else:
                                     st.error(msj)
+                                    if not df_reporte.empty:
+                                        st.dataframe(df_reporte, use_container_width=True)
                                     
                 with col_btn_sanc:
                     if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", use_container_width=True):
                         with st.spinner("Generando Sanciones en Rojo y Enviando Correo..."):
-                            if "TWILIO_ACCOUNT_SID" not in st.secrets:
+                            if "META_ACCESS_TOKEN." not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
                                 # Filtramos para enviar sanción SOLO a los que tienen estado "Pendiente"
@@ -471,12 +493,14 @@ else:
                                 if df_pendientes.empty:
                                     st.info("No hay órdenes pendientes para sancionar.")
                                 else:
-                                    exito, msj = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
+                                    exito, msj, df_reporte = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
                                     if exito:
                                         st.success(msj)
-                                        st.rerun()
+                                        st.dataframe(df_reporte, use_container_width=True)
                                     else:
                                         st.error(msj)
+                                        if not df_reporte.empty:
+                                            st.dataframe(df_reporte, use_container_width=True)
 
                 st.write("---")
                 
