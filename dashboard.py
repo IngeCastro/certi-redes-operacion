@@ -78,14 +78,15 @@ def verificar_seguridad():
     with col2:
         # --- EL LOGO ---
         try:
-            st.image("Logo_CertiRedes_Transparente.png", width=300)
+            st.image("Logo_CertiRedes_Transparente.png", width=350)
         except:
             # Si no encuentra el logo, muestra un ícono de respaldo
             st.markdown("<h1 style='text-align: center;'>🏢</h1>", unsafe_allow_html=True)
 
         # Títulos y Eslogan centrados con HTML
         st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Acceso Operativo</h2>", unsafe_allow_html=True)
-        st.markdown("<div class='slogan'>CERTIFICAMOS TU TRANQUILIDAD</div>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Certi-Redes S.A.S - Cali</h2>", unsafe_allow_html=True)
+        st.markdown("<div class='slogan'>*** CERTIFICAMOS TU TRANQUILIDAD ***</div>", unsafe_allow_html=True)
         
         # Cajas de texto
         usuario = st.text_input("Usuario")
