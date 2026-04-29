@@ -8,13 +8,6 @@ import gc
 import traceback # Para capturar errores exactos en la consola
 import warnings # Para silenciar advertencias de rendimiento
 
-# Apagamos todas las advertencias rojas molestas de Pandas en la consola
-warnings.filterwarnings('ignore')
-
-# IMPORTAMOS NUESTROS NUEVOS MÓDULOS
-from database import cargar_tabla, guardar_tabla
-from whatsapp_module import enviar_mensajes_agenda
-
 # ==========================================
 # 0. CONSTANTES Y CONFIGURACIÓN
 # ==========================================
@@ -25,6 +18,58 @@ pd.set_option("styler.render.max_elements", 5000000)
 TABLA_BASE = 'base_general'
 TABLA_HISTORIAL = 'historial_certiredes'
 TABLA_INSPECTORES = 'directorio_inspectores'
+
+import streamlit as st
+
+# (Si tienes st.set_page_config, déjalo aquí arriba)
+
+def verificar_seguridad():
+    """Barrera de seguridad para Certi-Redes"""
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    # Si ya puso la clave, lo dejamos pasar limpiamente
+    if st.session_state["autenticado"]:
+        return
+
+    # Si NO está autenticado, dibujamos el login
+    st.markdown("<br><br>", unsafe_allow_html=True) # Espacio en blanco
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.title("🔒 Acceso Operativo")
+        st.subheader("Certi-Redes S.A.S.")
+        
+        usuario = st.text_input("Usuario")
+        clave = st.text_input("Contraseña", type="password")
+
+        if st.button("Ingresar", use_container_width=True):
+            # Valida con los secretos temporales (para pruebas locales usa st.secrets si ya lo configuraste, 
+            # o pon strings directos "admin" / "1234" SOLO por un minuto para probar)
+            if usuario == st.secrets["auth"]["usuario"] and clave == st.secrets["auth"]["clave"]:
+                st.session_state["autenticado"] = True
+                st.rerun() # Refresca la página
+            else:
+                st.error("❌ Credenciales incorrectas. Acceso denegado.")
+    
+    # ¡AQUÍ ESTÁ LA MAGIA! Esto detiene la ejecución del resto del código
+    st.stop() 
+
+# 3. ACTIVAMOS LA BARRERA
+verificar_seguridad()
+
+# =========================================================
+# A PARTIR DE AQUÍ VA TODO TU CÓDIGO NORMAL (Sin mezclas)
+# (Todo tu st.sidebar, tus títulos, tus filtros de pandas, etc.)
+# =========================================================
+
+# Apagamos todas las advertencias rojas molestas de Pandas en la consola
+warnings.filterwarnings('ignore')
+
+# IMPORTAMOS NUESTROS NUEVOS MÓDULOS
+from database import cargar_tabla, guardar_tabla
+from whatsapp_module import enviar_mensajes_agenda
+
+
 
 # --- NUEVO ESCUDO PROTECTOR DE TABLAS ---
 def cargar_tabla_segura(nombre_tabla):
