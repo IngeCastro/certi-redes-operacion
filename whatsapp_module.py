@@ -158,12 +158,14 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
         phone_number_id = str(st.secrets.get("META_PHONE_NUMBER_ID", "")).strip()
         meta_version = "v18.0"
         meta_url = f"https://graph.facebook.com/{meta_version}/{phone_number_id}/messages"
-        
+
         # --- SELECCIÓN DE PLANTILLA SEGÚN EL MODO ---
         if tipo_envio == "sancion":
-            template_name = "envio_sanciones1"
+            # Usamos el nombre exacto que aparece en Meta
+            template_name = "envio_sanciones1_hx918226fe0bf8112d50f77cae979ea926"
         else:
-            template_name = "envio_programacion3"
+            # Usamos el nombre exacto que aparece en Meta
+            template_name = "envio_programacion3_hx991fa3deb6b92b825e47298166905e3e"
             
         # --- CREDENCIALES SUPABASE ---
         supabase_url = str(st.secrets.get("SUPABASE_URL", "")).strip()
