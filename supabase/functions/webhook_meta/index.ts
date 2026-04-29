@@ -44,7 +44,7 @@ Deno.serve(async (req) => {
 
            // PASO 3: Actualizar la base general usando el código
            const { error: errorUpdate } = await supabase
-             .from('base_general')
+             .from('base_general_test')
              .update({ estado_whatsapp: '✅ RECIBIDO' })
              .eq('codigo_tecnico', codigo)
              .eq('estado_whatsapp', '✅ MSJ ENVIADO') // Solo actualiza si estaba en 'ENVIADO'
