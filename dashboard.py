@@ -168,7 +168,7 @@ def procesar_nuevas_bases(archivos_subidos):
             if 'fecha_asignacion' in df_nuevos.columns:
                 df_nuevos['fecha_asignacion'] = convertir_fechas_espanol(df_nuevos['fecha_asignacion'])
                 
-            for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico']:
+            for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico', 'inspector']:
                 if col not in df_nuevos.columns:
                     df_nuevos[col] = pd.NA
             
@@ -260,9 +260,9 @@ def mostrar_tabla_optimizada(df):
     if len(df) > 1500:
         st.warning(f"⚡ MODO ALTO RENDIMIENTO: Mostrando los últimos 1500 registros de **{len(df):,}** totales. Use el botón 'Descargar' para ver la base completa en Excel.")
         # Mostramos los últimos 1500 SIN el estilizador para carga instantánea
-        st.dataframe(df.tail(1500).fillna('').astype(str), use_container_width=True)
+        st.dataframe(df.tail(1500).fillna('').astype(str), width="stretch")
     else:
-        st.dataframe(centrar_df(df), use_container_width=True)
+        st.dataframe(centrar_df(df), width="stretch")
 
 def formatear_estado_visita(df):
     df_formateado = df.copy()
@@ -297,7 +297,7 @@ with st.sidebar:
     
     st.markdown("### 📥 1. CARGA DE BASE GENERAL")
     archivos_bases = st.file_uploader("Suba su matriz original (.csv, .xlsx)", accept_multiple_files=True, key="side_uploader")
-    if archivos_bases and st.button("🚀 Cargar a la Nube", use_container_width=True, key="side_btn"):
+    if archivos_bases and st.button("🚀 Cargar a la Nube", width="stretch", key="side_btn"):
         with st.spinner("Limpiando y subiendo (Alto Rendimiento)..."):
             res = procesar_nuevas_bases(archivos_bases)
             if res is True:
@@ -335,7 +335,7 @@ if df_activa.empty:
     st.write("---")
     
     archivos_bases_main = st.file_uploader("Arrastre su archivo Excel o CSV aquí:", accept_multiple_files=True, key="main_uploader")
-    if archivos_bases_main and st.button("🚀 Iniciar Procesamiento de Base", use_container_width=True, key="main_btn"):
+    if archivos_bases_main and st.button("🚀 Iniciar Procesamiento de Base", width="stretch", key="main_btn"):
         with st.spinner("Limpiando formatos, detectando fechas y subiendo a la nube..."):
             res = procesar_nuevas_bases(archivos_bases_main)
             if res is True:
@@ -358,7 +358,7 @@ else:
         with col_f2:
             with st.expander("⬆️ Actualizar Ejecución (Suba aquí el archivo con la columna 'ESTADO' y 'CONTRATO')", expanded=False):
                 archivos_ejec = st.file_uploader("Suba el Excel de los inspectores para actualizar Efectivas/VNE:", accept_multiple_files=True, key="up_ejec")
-                if archivos_ejec and st.button("🔄 Procesar y Actualizar Estados", use_container_width=True):
+                if archivos_ejec and st.button("🔄 Procesar y Actualizar Estados", width="stretch"):
                     with st.spinner("Cruzando datos (por Contrato) y actualizando tablero..."):
                         res = procesar_nuevas_bases(archivos_ejec)
                         if res is True:
@@ -374,13 +374,21 @@ else:
                 st.write("---")
                 st.markdown("#### 🔍 Filtros Operativos")
                 col_filt1, col_filt2, col_filt3 = st.columns(3)
-                
-                municipios_disp = ["Todos"] + sorted(df_dia['municipio'].dropna().unique().tolist())
+
+                # Filtro seguro para Municipio
+                if 'municipio' in df_dia.columns:
+                    municipios_disp = ["Todos"] + sorted(df_dia['municipio'].dropna().astype(str).unique().tolist())
+                else:
+                    municipios_disp = ["Todos"]
                 filtro_muni = col_filt1.selectbox("Filtrar por Municipio:", options=municipios_disp, index=0)
-                
-                inspectores_disp = ["Todos"] + sorted(df_dia['inspector'].dropna().unique().tolist())
+
+                # Filtro seguro para Inspector
+                if 'inspector' in df_dia.columns:
+                    inspectores_disp = ["Todos"] + sorted(df_dia['inspector'].dropna().astype(str).unique().tolist())
+                else:
+                    inspectores_disp = ["Todos"]
                 filtro_insp = col_filt2.selectbox("Filtrar por Inspector:", options=inspectores_disp, index=0)
-                
+                            
                 df_dia['estado_puro'] = df_dia['estado_visita'].astype(str).str.upper().str.strip()
                 estados_disp = ["Todos", "EFECTIVAS (Certificadas/No Certificadas)", "NO EFECTIVAS (VNE)", "PENDIENTES"]
                 filtro_estado = col_filt3.selectbox("Filtrar por Estado:", options=estados_disp, index=0)
@@ -468,7 +476,7 @@ else:
                 col_btn_prog, col_btn_sanc = st.columns(2)
                 
                 with col_btn_prog:
-                    if st.button("☀️ Enviar Programación (Mañana)", type="primary", use_container_width=True):
+                    if st.button("☀️ Enviar Programación (Mañana)", type="primary", width="stretch"):
                         with st.spinner("Conectando con Twilio para Programaciones..."):
                             if "META_ACCESS_TOKEN" not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
@@ -476,14 +484,14 @@ else:
                                 exito, msj, df_reporte = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
                                 if exito:
                                     st.success(msj)
-                                    st.dataframe(df_reporte, use_container_width=True)
+                                    st.dataframe(df_reporte, width="stretch")
                                 else:
                                     st.error(msj)
                                     if not df_reporte.empty:
-                                        st.dataframe(df_reporte, use_container_width=True)
+                                        st.dataframe(df_reporte, width="stretch")
                                     
                 with col_btn_sanc:
-                    if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", use_container_width=True):
+                    if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", width="stretch"):
                         with st.spinner("Generando Sanciones en Rojo y Enviando Correo..."):
                             if "META_ACCESS_TOKEN." not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
@@ -496,11 +504,11 @@ else:
                                     exito, msj, df_reporte = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
                                     if exito:
                                         st.success(msj)
-                                        st.dataframe(df_reporte, use_container_width=True)
+                                        st.dataframe(df_reporte, width="stretch")
                                     else:
                                         st.error(msj)
                                         if not df_reporte.empty:
-                                            st.dataframe(df_reporte, use_container_width=True)
+                                            st.dataframe(df_reporte, width="stretch")
 
                 st.write("---")
                 
@@ -568,7 +576,7 @@ else:
                         data=excel_dia,
                         file_name=f"Operacion_{f_str}_{filtro_muni}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        width="stretch"
                     )
                 
                 # AÑADIMOS 'estado_ans' A LAS COLUMNAS VISIBLES DE LA TABLA
@@ -599,7 +607,7 @@ else:
                 data=excel_data,
                 file_name=f"Base_General_CertiRedes_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width="stretch"
             )
             
         df_activa_visual = formatear_estado_visita(df_activa)
@@ -625,7 +633,7 @@ else:
             st.info("Suba un archivo con las columnas: Código Técnico, Cédula, Nombre, Celular.")
             archivo_insp = st.file_uploader("Subir base de técnicos", type=['csv', 'xlsx'], key="up_insp")
             
-            if archivo_insp and st.button("🚀 Procesar y Guardar Directorio", use_container_width=True):
+            if archivo_insp and st.button("🚀 Procesar y Guardar Directorio", width="stretch"):
                 with st.spinner("Cruzando y actualizando base de inspectores..."):
                     try:
                         if archivo_insp.name.lower().endswith('.csv'):
