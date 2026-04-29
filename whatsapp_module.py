@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import time
-from twilio.rest import Client
 from database import cargar_tabla, guardar_tabla
 import traceback
 import json
@@ -148,41 +147,47 @@ def enviar_reporte_correo(df_pendientes):
         return False
 
 def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
-    """Módulo principal. tipo_envio puede ser 'programacion' o 'sancion'."""
+    """Módulo principal ajustado para usar Meta WhatsApp Cloud API."""
     try:
         print(f"\n===========================================")
-        print(f"📱 INICIANDO MÓDULO WA - MODO: {tipo_envio.upper()}")
+        print(f"📱 INICIANDO MÓDULO WA (META API) - MODO: {tipo_envio.upper()}")
         print(f"===========================================")
         
-        account_sid = str(st.secrets.get("TWILIO_ACCOUNT_SID", "")).strip()
-        auth_token = str(st.secrets.get("TWILIO_AUTH_TOKEN", "")).strip()
-        twilio_phone = str(st.secrets.get("TWILIO_PHONE", "")).strip()
-        
+        # --- CREDENCIALES META ---
+        meta_token = str(st.secrets.get("META_ACCESS_TOKEN", "")).strip()
+        phone_number_id = str(st.secrets.get("META_PHONE_NUMBER_ID", "")).strip()
+        meta_version = "v18.0"
+        meta_url = f"https://graph.facebook.com/{meta_version}/{phone_number_id}/messages"
+
         # --- SELECCIÓN DE PLANTILLA SEGÚN EL MODO ---
         if tipo_envio == "sancion":
-            template_sid = str(st.secrets.get("TWILIO_TEMPLATE_SID_SANCION", "")).strip()
+            # Usamos el nombre exacto que aparece en Meta
+            template_name = "aviso_incump_dia01"
         else:
-            template_sid = str(st.secrets.get("TWILIO_TEMPLATE_SID_PROG", "")).strip()
+            # Usamos el nombre exacto que aparece en Meta
+            template_name = "envio_prueba_prog01"
             
+        # --- CREDENCIALES SUPABASE ---
         supabase_url = str(st.secrets.get("SUPABASE_URL", "")).strip()
         if supabase_url.startswith("[") and "](" in supabase_url:
             supabase_url = supabase_url.split("](")[1].strip(")")
         supabase_url = supabase_url.rstrip("/")
         supabase_key = str(st.secrets.get("SUPABASE_KEY", "")).strip()
-        
-        twilio_phone = twilio_phone.replace('whatsapp:', '').replace(' ', '')
-        if twilio_phone and not twilio_phone.startswith('+'):
-            twilio_phone = '+' + twilio_phone
             
-        if not account_sid or not template_sid or not supabase_url:
-            return False, f"🚨 FALTAN CREDENCIALES: Revise su secrets.toml (Falta template para {tipo_envio})."
+        if not meta_token or not phone_number_id or not supabase_url:
+            return False, f"🚨 FALTAN CREDENCIALES: Revise su secrets.toml (Faltan variables META o SUPABASE).", pd.DataFrame()
             
-        cliente_twilio = Client(account_sid, auth_token)
+        # Headers para las peticiones a Meta
+        meta_headers = {
+            "Authorization": f"Bearer {meta_token}",
+            "Content-Type": "application/json"
+        }
+            
         df_inspectores = cargar_tabla(TABLA_INSPECTORES)
         df_activa_temp = cargar_tabla(TABLA_BASE)
         
         if df_activa_temp.empty:
-            return False, "La base general está vacía."
+            return False, "La base general está vacía.", pd.DataFrame()
             
         # Filtro de pendientes según el modo
         if tipo_envio == "sancion":
@@ -191,14 +196,14 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
             df_pendientes = df_agenda_dia[~df_agenda_dia['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]
         
         if df_pendientes.empty:
-            return True, "No hay órdenes pendientes para procesar en esta modalidad."
+            return True, "No hay órdenes pendientes para procesar en esta modalidad.", pd.DataFrame()
 
         grupos_inspector = df_pendientes.groupby('codigo_tecnico')
         
         mensajes_exitosos = 0
         mensajes_fallidos = 0
         ordenes_cubiertas = 0
-        ultimo_error = ""
+        registro_reporte = [] # LISTA PARA LA TABLA VISUAL
         
         texto_progreso = "Generando SANCIONES en rojo..." if tipo_envio == "sancion" else "Generando PROGRAMACIONES en alta resolución..."
         barra_wa = st.progress(0, text=texto_progreso)
@@ -210,66 +215,112 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
             cod_tecnico_str = str(cod_tecnico).strip().replace('.0', '').replace('nan', '')
             
             if df_inspectores.empty:
+                registro_reporte.append({"Inspector": f"Cód: {cod_tecnico_str}", "Órdenes": len(df_grupo), "Estado": "❌ Fallido", "Detalle": "BD Inspectores vacía"})
                 continue
                 
             filtro_insp = df_inspectores[df_inspectores['codigo_tecnico'].astype(str).str.strip() == cod_tecnico_str]
             if filtro_insp.empty:
+                registro_reporte.append({"Inspector": f"Cód: {cod_tecnico_str}", "Órdenes": len(df_grupo), "Estado": "❌ Fallido", "Detalle": "No existe en el directorio"})
                 continue
             
             celular_tecnico = str(filtro_insp.iloc[0].get('celular', '')).strip().replace('.0', '').replace(' ', '').replace('nan', '')
-            if not celular_tecnico.startswith('+'): celular_tecnico = '+57' + celular_tecnico
+            # La API de Meta requiere el número con código de país pero SIN el '+'
+            if celular_tecnico.startswith('+'): 
+                celular_tecnico = celular_tecnico[1:]
+            elif not celular_tecnico.startswith('57'):
+                celular_tecnico = '57' + celular_tecnico
             
             nombre_tecnico = str(filtro_insp.iloc[0].get('nombre', '')).strip()
             fecha_agenda = str(df_grupo.iloc[0].get('fecha_programacion', '')).strip().split(' ')[0]
             
             try:
-                # 1. GENERAR LA FOTO (Pasando el tipo_envio)
+                # 1. GENERAR LA FOTO
                 buffer_imagen = generar_imagen_tabla(df_grupo, nombre_tecnico, fecha_agenda, tipo_envio)
                 
-                # 2. SUBIR A SUPABASE
+                # 2. SUBIR A SUPABASE (Meta necesita el link público)
                 prefijo = "sancion_" if tipo_envio == "sancion" else "agenda_"
                 nombre_archivo = f"{prefijo}{cod_tecnico_str}_{int(time.time())}.png"
                 link_imagen = subir_imagen_supabase(buffer_imagen, nombre_archivo, supabase_url, supabase_key)
                 
-                # 3. ENVIAR POR TWILIO
-                remitente_wa = f"whatsapp:{twilio_phone}"
-                variables_plantilla = json.dumps({"1": nombre_tecnico, "2": fecha_agenda, "3": link_imagen})
+                # 3. ENVIAR POR META CLOUD API
+                payload = {
+                    "messaging_product": "whatsapp",
+                    "to": celular_tecnico,
+                    "type": "template",
+                    "template": {
+                        "name": template_name,
+                        "language": {
+                            "code": "es"
+                        },
+                        "components": [
+                            {
+                                "type": "header",
+                                "parameters": [
+                                    {
+                                        "type": "image",
+                                        "image": {
+                                            "link": link_imagen
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "body",
+                                "parameters": [
+                                    {
+                                        "type": "text",
+                                        "parameter_name": "nombre",                                       
+                                        "text": str(nombre_tecnico)
+                                    },
+                                    {
+                                        "type": "text",
+                                        "parameter_name": "fecha",                                        
+                                        "text": str(fecha_agenda)
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
                 
-                cliente_twilio.messages.create(
-                    content_sid=template_sid,
-                    content_variables=variables_plantilla,
-                    from_=remitente_wa,
-                    to=f"whatsapp:{celular_tecnico}"
-                )
+                response = requests.post(meta_url, headers=meta_headers, data=json.dumps(payload))
+                resp_json = response.json()
                 
-                # 4. MARCAR EN BASE DE DATOS
-                estado_final = '🚨 SANCIONADO' if tipo_envio == "sancion" else '✅ MSJ ENVIADO'
-                df_activa_temp.loc[df_activa_temp['orden'].isin(df_grupo['orden']), 'estado_whatsapp'] = estado_final
-                mensajes_exitosos += 1
-                ordenes_cubiertas += len(df_grupo)
-                
+                # 4. VERIFICACIÓN Y MARCA EN BASE DE DATOS
+                if 'messages' in resp_json:
+                    estado_final = '🚨 SANCIONADO' if tipo_envio == "sancion" else '✅ MSJ ENVIADO'
+                    df_activa_temp.loc[df_activa_temp['orden'].isin(df_grupo['orden']), 'estado_whatsapp'] = estado_final
+                    mensajes_exitosos += 1
+                    ordenes_cubiertas += len(df_grupo)
+                    registro_reporte.append({"Inspector": nombre_tecnico, "Órdenes": len(df_grupo), "Estado": "✅ Exitoso", "Detalle": "Mensaje enviado (Meta)"})
+                else:
+                    error_bruto = json.dumps(resp_json, ensure_ascii=False)
+                    print(f"\n🚨 ERROR COMPLETO DE META:\n{error_bruto}\n")
+                    raise Exception(f"Revisa la consola negra para ver el error.")
             except Exception as e:
-                ultimo_error = str(e)
                 mensajes_fallidos += 1
+                registro_reporte.append({"Inspector": nombre_tecnico, "Órdenes": len(df_grupo), "Estado": "❌ Fallido", "Detalle": str(e)[:40]})
                 
             barra_wa.progress(min(actual / total_grupos, 1.0), text=f"Procesando inspector {actual}/{total_grupos}...")
-            time.sleep(1)
+            # Pausa para no saturar la API (Rate limit)
+            time.sleep(0.5)
             
         guardar_tabla(df_activa_temp, TABLA_BASE)
+        df_reporte = pd.DataFrame(registro_reporte)
         
         # --- CORREO FINAL (SOLO EN SANCIONES) ---
         if tipo_envio == "sancion" and mensajes_exitosos > 0:
             barra_wa.progress(1.0, text="Enviando reporte Excel a Coordinación...")
             enviado = enviar_reporte_correo(df_pendientes)
             if enviado:
-                return True, f"¡Sanciones aplicadas! {mensajes_exitosos} técnicos notificados ({ordenes_cubiertas} órdenes). Reporte enviado por correo."
+                return True, f"¡Sanciones aplicadas! Se notificaron {ordenes_cubiertas} órdenes en {mensajes_exitosos} mensajes. Reporte enviado por correo.", df_reporte
             else:
-                return True, f"Sanciones aplicadas por WhatsApp, pero falló el envío del correo de reporte. Revise sus credenciales de email."
+                return True, f"Sanciones aplicadas por WhatsApp, pero falló el envío del correo de reporte. Revise sus credenciales de email.", df_reporte
         
         if mensajes_fallidos > 0:
-            return False, f"⚠️ Alerta: {mensajes_fallidos} fallaron (Se enviaron {mensajes_exitosos}).\n\n**ERROR:**\n`{ultimo_error}`"
+            return False, f"⚠️ Alerta: Hubo fallos. Se notificaron {ordenes_cubiertas} órdenes en {mensajes_exitosos} mensajes.", df_reporte
         else:
-            return True, f"¡Éxito! Se procesaron {mensajes_exitosos} inspectores ({ordenes_cubiertas} órdenes)."
+            return True, f"¡Éxito! Se procesaron {mensajes_exitosos} inspectores (cubriendo {ordenes_cubiertas} órdenes).", df_reporte
         
     except Exception as e:
-        return False, f"Error fatal: {str(e)}"
+        return False, f"Error fatal: {str(e)}", pd.DataFrame()

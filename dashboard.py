@@ -8,13 +8,6 @@ import gc
 import traceback # Para capturar errores exactos en la consola
 import warnings # Para silenciar advertencias de rendimiento
 
-# Apagamos todas las advertencias rojas molestas de Pandas en la consola
-warnings.filterwarnings('ignore')
-
-# IMPORTAMOS NUESTROS NUEVOS MÓDULOS
-from database import cargar_tabla, guardar_tabla
-from whatsapp_module import enviar_mensajes_agenda
-
 # ==========================================
 # 0. CONSTANTES Y CONFIGURACIÓN
 # ==========================================
@@ -25,6 +18,106 @@ pd.set_option("styler.render.max_elements", 5000000)
 TABLA_BASE = 'base_general'
 TABLA_HISTORIAL = 'historial_certiredes'
 TABLA_INSPECTORES = 'directorio_inspectores'
+
+import streamlit as st
+
+# (Si tienes st.set_page_config, déjalo aquí arriba)
+
+import streamlit as st
+
+def verificar_seguridad():
+    """Barrera de seguridad para Certi-Redes con diseño Pro"""
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    if st.session_state["autenticado"]:
+        return
+
+    # Inyección de CSS para un look corporativo y ocultar las marcas de Streamlit
+    st.markdown("""
+        <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* ESTO ELIMINA EL ESPACIO GIGANTE DE ARRIBA */
+        .block-container {
+            padding-top: 1rem !important; 
+        }
+        
+        /* Estilo del botón de ingreso */
+        .stButton>button {
+            width: 100%;
+            background-color: #004b87;
+            color: white;
+            font-weight: bold;
+            border-radius: 8px;
+            border: none;
+            padding: 10px;
+        }
+        .stButton>button:hover {
+            background-color: #003366;
+            color: white;
+        }
+        
+        /* Estilo del Eslogan */
+        .slogan {
+            text-align: center;
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #555555;
+            font-style: italic;
+            margin-bottom: 30px;
+            letter-spacing: 1px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1.5, 1, 1.5])
+    
+    with col2:
+        # --- EL LOGO ---
+        try:
+            st.image("Logo_CertiRedes_Transparente.png", width=300)
+        except:
+            # Si no encuentra el logo, muestra un ícono de respaldo
+            st.markdown("<h1 style='text-align: center;'>🏢</h1>", unsafe_allow_html=True)
+
+        # Títulos y Eslogan centrados con HTML
+        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Acceso Operativo</h2>", unsafe_allow_html=True)
+        st.markdown("<div class='slogan'>CERTIFICAMOS TU TRANQUILIDAD</div>", unsafe_allow_html=True)
+        
+        # Cajas de texto
+        usuario = st.text_input("Usuario")
+        clave = st.text_input("Contraseña", type="password")
+
+        st.markdown("<br>", unsafe_allow_html=True) # Espaciado antes del botón
+
+        if st.button("Ingresar"):
+            if usuario == st.secrets["auth"]["usuario"] and clave == st.secrets["auth"]["clave"]:
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("❌ Credenciales incorrectas. Acceso denegado.")
+    
+    st.stop() 
+
+# 3. ACTIVAMOS LA BARRERA
+verificar_seguridad()
+
+# =========================================================
+# A PARTIR DE AQUÍ VA TODO TU CÓDIGO NORMAL (Sin mezclas)
+# (Todo tu st.sidebar, tus títulos, tus filtros de pandas, etc.)
+# =========================================================
+
+# Apagamos todas las advertencias rojas molestas de Pandas en la consola
+warnings.filterwarnings('ignore')
+
+# IMPORTAMOS NUESTROS NUEVOS MÓDULOS
+from database import cargar_tabla, guardar_tabla
+from whatsapp_module import enviar_mensajes_agenda
+
+
 
 # --- NUEVO ESCUDO PROTECTOR DE TABLAS ---
 def cargar_tabla_segura(nombre_tabla):
@@ -168,7 +261,7 @@ def procesar_nuevas_bases(archivos_subidos):
             if 'fecha_asignacion' in df_nuevos.columns:
                 df_nuevos['fecha_asignacion'] = convertir_fechas_espanol(df_nuevos['fecha_asignacion'])
                 
-            for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico']:
+            for col in ['estado_whatsapp', 'estado_ejecucion', 'num_vne', 'municipio', 'estado_visita', 'codigo_tecnico', 'inspector']:
                 if col not in df_nuevos.columns:
                     df_nuevos[col] = pd.NA
             
@@ -260,9 +353,9 @@ def mostrar_tabla_optimizada(df):
     if len(df) > 1500:
         st.warning(f"⚡ MODO ALTO RENDIMIENTO: Mostrando los últimos 1500 registros de **{len(df):,}** totales. Use el botón 'Descargar' para ver la base completa en Excel.")
         # Mostramos los últimos 1500 SIN el estilizador para carga instantánea
-        st.dataframe(df.tail(1500).fillna('').astype(str), use_container_width=True)
+        st.dataframe(df.tail(1500).fillna('').astype(str), width="stretch")
     else:
-        st.dataframe(centrar_df(df), use_container_width=True)
+        st.dataframe(centrar_df(df), width="stretch")
 
 def formatear_estado_visita(df):
     df_formateado = df.copy()
@@ -297,7 +390,7 @@ with st.sidebar:
     
     st.markdown("### 📥 1. CARGA DE BASE GENERAL")
     archivos_bases = st.file_uploader("Suba su matriz original (.csv, .xlsx)", accept_multiple_files=True, key="side_uploader")
-    if archivos_bases and st.button("🚀 Cargar a la Nube", use_container_width=True, key="side_btn"):
+    if archivos_bases and st.button("🚀 Cargar a la Nube", width="stretch", key="side_btn"):
         with st.spinner("Limpiando y subiendo (Alto Rendimiento)..."):
             res = procesar_nuevas_bases(archivos_bases)
             if res is True:
@@ -335,7 +428,7 @@ if df_activa.empty:
     st.write("---")
     
     archivos_bases_main = st.file_uploader("Arrastre su archivo Excel o CSV aquí:", accept_multiple_files=True, key="main_uploader")
-    if archivos_bases_main and st.button("🚀 Iniciar Procesamiento de Base", use_container_width=True, key="main_btn"):
+    if archivos_bases_main and st.button("🚀 Iniciar Procesamiento de Base", width="stretch", key="main_btn"):
         with st.spinner("Limpiando formatos, detectando fechas y subiendo a la nube..."):
             res = procesar_nuevas_bases(archivos_bases_main)
             if res is True:
@@ -358,7 +451,7 @@ else:
         with col_f2:
             with st.expander("⬆️ Actualizar Ejecución (Suba aquí el archivo con la columna 'ESTADO' y 'CONTRATO')", expanded=False):
                 archivos_ejec = st.file_uploader("Suba el Excel de los inspectores para actualizar Efectivas/VNE:", accept_multiple_files=True, key="up_ejec")
-                if archivos_ejec and st.button("🔄 Procesar y Actualizar Estados", use_container_width=True):
+                if archivos_ejec and st.button("🔄 Procesar y Actualizar Estados", width="stretch"):
                     with st.spinner("Cruzando datos (por Contrato) y actualizando tablero..."):
                         res = procesar_nuevas_bases(archivos_ejec)
                         if res is True:
@@ -374,13 +467,21 @@ else:
                 st.write("---")
                 st.markdown("#### 🔍 Filtros Operativos")
                 col_filt1, col_filt2, col_filt3 = st.columns(3)
-                
-                municipios_disp = ["Todos"] + sorted(df_dia['municipio'].dropna().unique().tolist())
+
+                # Filtro seguro para Municipio
+                if 'municipio' in df_dia.columns:
+                    municipios_disp = ["Todos"] + sorted(df_dia['municipio'].dropna().astype(str).unique().tolist())
+                else:
+                    municipios_disp = ["Todos"]
                 filtro_muni = col_filt1.selectbox("Filtrar por Municipio:", options=municipios_disp, index=0)
-                
-                inspectores_disp = ["Todos"] + sorted(df_dia['inspector'].dropna().unique().tolist())
+
+                # Filtro seguro para Inspector
+                if 'inspector' in df_dia.columns:
+                    inspectores_disp = ["Todos"] + sorted(df_dia['inspector'].dropna().astype(str).unique().tolist())
+                else:
+                    inspectores_disp = ["Todos"]
                 filtro_insp = col_filt2.selectbox("Filtrar por Inspector:", options=inspectores_disp, index=0)
-                
+                            
                 df_dia['estado_puro'] = df_dia['estado_visita'].astype(str).str.upper().str.strip()
                 estados_disp = ["Todos", "EFECTIVAS (Certificadas/No Certificadas)", "NO EFECTIVAS (VNE)", "PENDIENTES"]
                 filtro_estado = col_filt3.selectbox("Filtrar por Estado:", options=estados_disp, index=0)
@@ -425,9 +526,27 @@ else:
                 df_filtrado['estado_ans'] = df_filtrado.apply(evaluar_ans_fila, axis=1)
                 # -----------------------------------------------------------
 
+                # === NUEVA LÓGICA DE CONTADORES SEPARADOS (ÓRDENES VS MENSAJES) ===
                 c_prog = len(df_filtrado)
-                c_env = len(df_filtrado[df_filtrado['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]) if 'estado_whatsapp' in df_filtrado.columns else 0
-                c_no_env = c_prog - c_env
+                
+                if 'estado_whatsapp' in df_filtrado.columns:
+                    # Filtramos los que ya tienen marca de ENVIADO
+                    df_enviados = df_filtrado[df_filtrado['estado_whatsapp'].astype(str).str.upper().str.contains('ENVIADO', na=False)]
+                    c_ordenes_env = len(df_enviados)
+                    
+                    # Contamos los inspectores únicos para saber cuántos mensajes reales salieron
+                    if 'codigo_tecnico' in df_enviados.columns:
+                        c_mensajes_env = df_enviados['codigo_tecnico'].nunique()
+                    elif 'inspector' in df_enviados.columns:
+                        c_mensajes_env = df_enviados['inspector'].nunique()
+                    else:
+                        c_mensajes_env = 0
+                else:
+                    c_ordenes_env = 0
+                    c_mensajes_env = 0
+                    
+                c_no_env = c_prog - c_ordenes_env
+                # ==================================================================
                 
                 estados_filtrados = df_filtrado['estado_puro']
                 mask_efectivas = estados_filtrados.isin(['CERTIFICADO', 'NO CERTIFICADO'])
@@ -439,31 +558,35 @@ else:
                 st.write("---")
                 
                 st.markdown("#### 📱 1. Gestión de Mensajería WhatsApp")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("📅 Total Programados", c_prog)
-                m2.metric("📤 Total Enviados", c_env)
-                m3.metric("⏳ No Enviados", c_no_env)
+                # Ampliamos a 4 columnas para que quepan ambos contadores
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("📅 Órdenes Programadas", c_prog)
+                m2.metric("📦 Órdenes Enviadas", c_ordenes_env, help="Total de órdenes individuales notificadas")
+                m3.metric("📨 Mensajes Enviados", c_mensajes_env, help="Total de WhatsApps agrupados enviados a inspectores")
+                m4.metric("⏳ Órdenes Pendientes", c_no_env)
                 
                 st.write("#### 🚀 Acciones Masivas")
                 col_btn_prog, col_btn_sanc = st.columns(2)
                 
                 with col_btn_prog:
-                    if st.button("☀️ Enviar Programación (Mañana)", type="primary", use_container_width=True):
-                        with st.spinner("Conectando con Twilio para Programaciones..."):
-                            if "TWILIO_ACCOUNT_SID" not in st.secrets:
+                    if st.button("☀️ Enviar Programación (Mañana)", type="primary", width="stretch"):
+                        with st.spinner("Conectando con Meta Cloud API... Ing Jorge"):
+                            if "META_ACCESS_TOKEN" not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
-                                exito, msj = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
+                                exito, msj, df_reporte = enviar_mensajes_agenda(df_filtrado, tipo_envio="programacion") 
                                 if exito:
                                     st.success(msj)
-                                    st.rerun()
+                                    st.dataframe(df_reporte, width="stretch")
                                 else:
                                     st.error(msj)
+                                    if not df_reporte.empty:
+                                        st.dataframe(df_reporte, width="stretch")
                                     
                 with col_btn_sanc:
-                    if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", use_container_width=True):
+                    if st.button("🛑 Cierre 7:00 PM: Sancionar Pendientes", type="secondary", width="stretch"):
                         with st.spinner("Generando Sanciones en Rojo y Enviando Correo..."):
-                            if "TWILIO_ACCOUNT_SID" not in st.secrets:
+                            if "META_ACCESS_TOKEN." not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:
                                 # Filtramos para enviar sanción SOLO a los que tienen estado "Pendiente"
@@ -471,12 +594,14 @@ else:
                                 if df_pendientes.empty:
                                     st.info("No hay órdenes pendientes para sancionar.")
                                 else:
-                                    exito, msj = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
+                                    exito, msj, df_reporte = enviar_mensajes_agenda(df_pendientes, tipo_envio="sancion") 
                                     if exito:
                                         st.success(msj)
-                                        st.rerun()
+                                        st.dataframe(df_reporte, width="stretch")
                                     else:
                                         st.error(msj)
+                                        if not df_reporte.empty:
+                                            st.dataframe(df_reporte, width="stretch")
 
                 st.write("---")
                 
@@ -544,7 +669,7 @@ else:
                         data=excel_dia,
                         file_name=f"Operacion_{f_str}_{filtro_muni}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+                        width="stretch"
                     )
                 
                 # AÑADIMOS 'estado_ans' A LAS COLUMNAS VISIBLES DE LA TABLA
@@ -575,7 +700,7 @@ else:
                 data=excel_data,
                 file_name=f"Base_General_CertiRedes_{datetime.date.today().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width="stretch"
             )
             
         df_activa_visual = formatear_estado_visita(df_activa)
@@ -601,7 +726,7 @@ else:
             st.info("Suba un archivo con las columnas: Código Técnico, Cédula, Nombre, Celular.")
             archivo_insp = st.file_uploader("Subir base de técnicos", type=['csv', 'xlsx'], key="up_insp")
             
-            if archivo_insp and st.button("🚀 Procesar y Guardar Directorio", use_container_width=True):
+            if archivo_insp and st.button("🚀 Procesar y Guardar Directorio", width="stretch"):
                 with st.spinner("Cruzando y actualizando base de inspectores..."):
                     try:
                         if archivo_insp.name.lower().endswith('.csv'):
