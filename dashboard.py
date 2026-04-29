@@ -477,7 +477,7 @@ else:
                 
                 with col_btn_prog:
                     if st.button("☀️ Enviar Programación (Mañana)", type="primary", width="stretch"):
-                        with st.spinner("Conectando con Twilio para Programaciones..."):
+                        with st.spinner("Conectando con Meta Cloud API... Ing Jorge"):
                             if "META_ACCESS_TOKEN" not in st.secrets:
                                 st.error("🚨 ERROR: No se encontraron credenciales de Twilio.")
                             else:

@@ -162,10 +162,10 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
         # --- SELECCIÓN DE PLANTILLA SEGÚN EL MODO ---
         if tipo_envio == "sancion":
             # Usamos el nombre exacto que aparece en Meta
-            template_name = "envio_sanciones1_hx918226fe0bf8112d50f77cae979ea926"
+            template_name = "aviso_incump_dia01"
         else:
             # Usamos el nombre exacto que aparece en Meta
-            template_name = "envio_programacion3_hx991fa3deb6b92b825e47298166905e3e"
+            template_name = "envio_prueba_prog01"
             
         # --- CREDENCIALES SUPABASE ---
         supabase_url = str(st.secrets.get("SUPABASE_URL", "")).strip()
@@ -269,11 +269,13 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
                                 "parameters": [
                                     {
                                         "type": "text",
-                                        "text": nombre_tecnico
+                                        "parameter_name": "nombre",                                       
+                                        "text": str(nombre_tecnico)
                                     },
                                     {
                                         "type": "text",
-                                        "text": fecha_agenda
+                                        "parameter_name": "fecha",                                        
+                                        "text": str(fecha_agenda)
                                     }
                                 ]
                             }
@@ -292,9 +294,9 @@ def enviar_mensajes_agenda(df_agenda_dia, tipo_envio="programacion"):
                     ordenes_cubiertas += len(df_grupo)
                     registro_reporte.append({"Inspector": nombre_tecnico, "Órdenes": len(df_grupo), "Estado": "✅ Exitoso", "Detalle": "Mensaje enviado (Meta)"})
                 else:
-                    error_msg = resp_json.get('error', {}).get('message', 'Desconocido')
-                    raise Exception(f"Rechazado por Meta: {error_msg}")
-                    
+                    error_bruto = json.dumps(resp_json, ensure_ascii=False)
+                    print(f"\n🚨 ERROR COMPLETO DE META:\n{error_bruto}\n")
+                    raise Exception(f"Revisa la consola negra para ver el error.")
             except Exception as e:
                 mensajes_fallidos += 1
                 registro_reporte.append({"Inspector": nombre_tecnico, "Órdenes": len(df_grupo), "Estado": "❌ Fallido", "Detalle": str(e)[:40]})
