@@ -19,6 +19,107 @@ TABLA_BASE = 'base_general'
 TABLA_HISTORIAL = 'historial_certiredes'
 TABLA_INSPECTORES = 'directorio_inspectores'
 
+import streamlit as st
+
+# (Si tienes st.set_page_config, déjalo aquí arriba)
+
+import streamlit as st
+
+def verificar_seguridad():
+    """Barrera de seguridad para Certi-Redes con diseño Pro"""
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+
+    if st.session_state["autenticado"]:
+        return
+
+    # Inyección de CSS para un look corporativo y ocultar las marcas de Streamlit
+    st.markdown("""
+        <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* ESTO ELIMINA EL ESPACIO GIGANTE DE ARRIBA */
+        .block-container {
+            padding-top: 1rem !important; 
+        }
+        
+        /* Estilo del botón de ingreso */
+        .stButton>button {
+            width: 100%;
+            background-color: #004b87;
+            color: white;
+            font-weight: bold;
+            border-radius: 8px;
+            border: none;
+            padding: 10px;
+        }
+        .stButton>button:hover {
+            background-color: #003366;
+            color: white;
+        }
+        
+        /* Estilo del Eslogan */
+        .slogan {
+            text-align: center;
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #555555;
+            font-style: italic;
+            margin-bottom: 30px;
+            letter-spacing: 1px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1.5, 1, 1.5])
+    
+    with col2:
+        # --- EL LOGO ---
+        try:
+            st.image("Logo_CertiRedes_Transparente.png", width=350)
+        except:
+            # Si no encuentra el logo, muestra un ícono de respaldo
+            st.markdown("<h1 style='text-align: center;'>🏢</h1>", unsafe_allow_html=True)
+
+        # Títulos y Eslogan centrados con HTML
+        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Acceso Operativo</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Certi-Redes S.A.S - Cali</h2>", unsafe_allow_html=True)
+        st.markdown("<div class='slogan'>*** CERTIFICAMOS TU TRANQUILIDAD </div>", unsafe_allow_html=True)
+        
+        # Cajas de texto
+        usuario = st.text_input("Usuario")
+        clave = st.text_input("Contraseña", type="password")
+
+        st.markdown("<br>", unsafe_allow_html=True) # Espaciado antes del botón
+
+        if st.button("Ingresar"):
+            if usuario == st.secrets["auth"]["usuario"] and clave == st.secrets["auth"]["clave"]:
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("❌ Credenciales incorrectas. Acceso denegado.")
+    
+    st.stop() 
+
+# 3. ACTIVAMOS LA BARRERA
+verificar_seguridad()
+
+# =========================================================
+# A PARTIR DE AQUÍ VA TODO TU CÓDIGO NORMAL (Sin mezclas)
+# (Todo tu st.sidebar, tus títulos, tus filtros de pandas, etc.)
+# =========================================================
+
+# Apagamos todas las advertencias rojas molestas de Pandas en la consola
+warnings.filterwarnings('ignore')
+
+# IMPORTAMOS NUESTROS NUEVOS MÓDULOS
+from database import cargar_tabla, guardar_tabla
+from whatsapp_module import enviar_mensajes_agenda
+
+
+
 # --- NUEVO ESCUDO PROTECTOR DE TABLAS ---
 def cargar_tabla_segura(nombre_tabla):
     """Intenta cargar la tabla. Si la tabla no existe en la nube, captura el error y devuelve un DataFrame vacío para no colapsar."""
