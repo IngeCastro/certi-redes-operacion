@@ -146,14 +146,16 @@ def convertir_fechas_espanol(serie):
     s_lower = s.replace(meses_map, regex=True)
         
     # 3. PARSEO INTELIGENTE "DOBLE MOTOR"
-    res = pd.to_datetime(s_lower, errors='coerce')
-    
-    # Lo que falló (NaT), lo intenta en formato latino (DD/MM/YYYY)
+    # MOTOR PRINCIPAL: Intenta siempre primero en formato latino (DD/MM/YYYY)
+    res = pd.to_datetime(s_lower, errors='coerce', dayfirst=True)
+
+    # MOTOR DE RESCATE: Lo que falló (NaT), lo intenta en formato gringo (MM/DD/YYYY)
     mask_nat = res.isna() & (s_lower != '')
     if mask_nat.any():
-        res[mask_nat] = pd.to_datetime(s_lower[mask_nat], errors='coerce', dayfirst=True)
+        res[mask_nat] = pd.to_datetime(s_lower[mask_nat], errors='coerce')
         
     return res.dt.strftime('%Y-%m-%d')
+
 
 def normalizar_columnas(df):
     # Bajar a minúsculas y quitar espacios
