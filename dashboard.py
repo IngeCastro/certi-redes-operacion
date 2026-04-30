@@ -24,6 +24,14 @@ TABLA_INSPECTORES = 'directorio_inspectores'
 import streamlit as st
 
 def verificar_seguridad():
+
+    """Barrera de seguridad para Certi-Redes con bypass local para desarrollo (leyendo secrets.toml)"""
+    # 1. EL INTERRUPTOR MÁGICO
+    # Si detecta que estás en tu PC (leyendo el secrets.toml local), te deja pasar de inmediato.
+    if st.secrets["auth"].get("ambiente") == "local":
+        st.session_state["autenticado"] = True
+        return
+
     """Barrera de seguridad para Certi-Redes con diseño horizontal compacto"""
     if "autenticado" not in st.session_state:
         st.session_state["autenticado"] = False
