@@ -41,14 +41,43 @@ def generar_imagen_tabla(df_grupo, nombre_inspector, fecha, tipo_envio="programa
     
     fecha_limpia = str(fecha).split(' ')[0]
     if "-" in fecha_limpia and len(fecha_limpia.split("-")) == 3:
-        y, m, d = fecha_limpia.split("-")
+        # AQUÍ ESTÁ LA CORRECCIÓN: Le decimos que el orden es Día, Mes, Año
+        d, m, y = fecha_limpia.split("-") 
         fecha_limpia = f"{d}/{m}/{y}"
+
+    
+    # 1. Tu código actual corregido (para el texto de abajo)
+    fecha_limpia = str(fecha).split(' ')[0]
+    if "-" in fecha_limpia and len(fecha_limpia.split("-")) == 3:
+        d, m, y = fecha_limpia.split("-")
+        fecha_limpia = f"{d}/{m}/{y}"
+
+    # 2. NUEVO: Creamos la fecha elegante SOLO para el título de arriba
+    try:
+        import pandas as pd
+        # Tomamos la fecha original y le ayudamos a Python a entender los meses en español
+        fecha_base = str(fecha).split(' ')[0].lower()
+        fecha_base = fecha_base.replace('abr', 'apr').replace('ago', 'aug').replace('dic', 'dec')
+    
+        # Convertimos el texto a un objeto de tiempo real
+        dt = pd.to_datetime(fecha_base)
+    
+        # Diccionarios de traducción manual para asegurar que siempre salga en español
+        dias = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        meses = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    
+        # Armamos la fecha final: ej. "miércoles 29 de abril 2026"
+        fecha_titulo = f"{dias[dt.dayofweek]} {dt.day} de {meses[dt.month]} {dt.year}"
+    
+    except Exception as e:
+        # Sistema de seguridad: si la fecha de Excel viene rara, usa la fecha corta
+        fecha_titulo = fecha_limpia
     
     alto_figura = max(4.5, len(df_visual) * 0.8 + 3) 
     fig, ax = plt.subplots(figsize=(13, alto_figura))
     ax.axis('tight')
     ax.axis('off')
-    
+        
     # --- LÓGICA DE COLORES SEGÚN EL TIPO DE ENVÍO ---
     if tipo_envio == "sancion":
         color_principal = "#DC2626" # Rojo Alerta
