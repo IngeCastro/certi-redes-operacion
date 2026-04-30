@@ -19,30 +19,29 @@ TABLA_BASE = 'base_general'
 TABLA_HISTORIAL = 'historial_certiredes'
 TABLA_INSPECTORES = 'directorio_inspectores'
 
-import streamlit as st
-
 # (Si tienes st.set_page_config, déjalo aquí arriba)
 
 import streamlit as st
 
 def verificar_seguridad():
-    """Barrera de seguridad para Certi-Redes con diseño Pro"""
+    """Barrera de seguridad para Certi-Redes con diseño horizontal compacto"""
     if "autenticado" not in st.session_state:
         st.session_state["autenticado"] = False
 
     if st.session_state["autenticado"]:
         return
 
-    # Inyección de CSS para un look corporativo y ocultar las marcas de Streamlit
+    # Inyección de CSS para diseño y quitar espacios
     st.markdown("""
         <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         header {visibility: hidden;}
         
-        /* ESTO ELIMINA EL ESPACIO GIGANTE DE ARRIBA */
+        /* Elimina el espacio gigante de arriba */
         .block-container {
-            padding-top: 1rem !important; 
+            padding-top: 2rem !important; 
+            padding-bottom: 0rem !important;
         }
         
         /* Estilo del botón de ingreso */
@@ -54,45 +53,32 @@ def verificar_seguridad():
             border-radius: 8px;
             border: none;
             padding: 10px;
+            margin-top: 10px;
         }
         .stButton>button:hover {
             background-color: #003366;
             color: white;
         }
-        
-        /* Estilo del Eslogan */
-        .slogan {
-            text-align: center;
-            font-size: 1.1rem;
-            font-weight: 500;
-            color: #555555;
-            font-style: italic;
-            margin-bottom: 30px;
-            letter-spacing: 1px;
-        }
         </style>
         """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1.5, 1, 1.5])
-    
-    with col2:
-        # --- EL LOGO ---
-        try:
-            st.image("Logo_CertiRedes_Transparente.png", width=350)
-        except:
-            # Si no encuentra el logo, muestra un ícono de respaldo
-            st.markdown("<h1 style='text-align: center;'>🏢</h1>", unsafe_allow_html=True)
 
-        # Títulos y Eslogan centrados con HTML
-        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Acceso Operativo</h2>", unsafe_allow_html=True)
-        st.markdown("<h2 style='text-align: center; color: #2e3b4e;'>Certi-Redes S.A.S - Cali</h2>", unsafe_allow_html=True)
-        st.markdown("<div class='slogan'>*** CERTIFICAMOS TU TRANQUILIDAD </div>", unsafe_allow_html=True)
+    # Creamos 4 columnas: Las de los extremos actúan como márgenes para centrar todo.
+    # col_logo tiene el logo (tamaño 1.5) y col_form tiene los inputs (tamaño 2)
+    col_vacia_izq, col_logo, col_form, col_vacia_der = st.columns([1, 1.5, 2, 1])
+    
+    with col_logo:
+        # Agrego un par de saltos de línea para que el logo baje y quede centrado con las cajas de texto
+        st.markdown("<br><br>", unsafe_allow_html=True) 
+        st.image("Logo_CertiRedes_Transparente.png", use_container_width=True)
+
+    with col_form:
+        # Textos alineados a la izquierda y sin márgenes para que no ocupen espacio innecesario
+        st.markdown("<h2 style='text-align: left; color: #2e3b4e; margin-bottom: 0px;'>Ingreso seguimiento y control Operativo</h2>", unsafe_allow_html=True)
+        st.markdown("<h4 style='text-align: left; color: #2e3b4e; margin-top: 0px;'>Certi-Redes S.A.S - Santiago de Cali</h4>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: left; font-size: 0.9rem; font-style: italic; color: #777; margin-bottom: 15px;'>*** CERTIFICAMOS TU TRANQUILIDAD ***</div>", unsafe_allow_html=True)
         
-        # Cajas de texto
         usuario = st.text_input("Usuario")
         clave = st.text_input("Contraseña", type="password")
-
-        st.markdown("<br>", unsafe_allow_html=True) # Espaciado antes del botón
 
         if st.button("Ingresar"):
             if usuario == st.secrets["auth"]["usuario"] and clave == st.secrets["auth"]["clave"]:
@@ -101,7 +87,7 @@ def verificar_seguridad():
             else:
                 st.error("❌ Credenciales incorrectas. Acceso denegado.")
     
-    st.stop() 
+    st.stop()
 
 # 3. ACTIVAMOS LA BARRERA
 verificar_seguridad()
