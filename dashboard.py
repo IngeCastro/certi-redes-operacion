@@ -215,8 +215,13 @@ def normalizar_columnas(df):
     # Al final aplicas el renombramiento
     df.rename(columns=nuevos_nombres, inplace=True)
 
+    # Guarda una copia exacta de la estructura limpia en tu computadora
+    df.to_csv("molde_certiredes.csv", index=False)
+
     # Eliminar columnas duplicadas si las hay
     return df.loc[:, ~df.columns.duplicated()]
+
+    
 
 def procesar_nuevas_bases(archivos_subidos):
     """
