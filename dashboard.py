@@ -7,6 +7,7 @@ import datetime
 import gc 
 import traceback # Para capturar errores exactos en la consola
 import warnings # Para silenciar advertencias de rendimiento
+import unicodedata # Asegúrate de poner esto al principio de tu archivo
 
 # ==========================================
 # 0. CONSTANTES Y CONFIGURACIÓN
@@ -164,11 +165,18 @@ def convertir_fechas_espanol(serie):
 
     return res.dt.strftime('%Y-%m-%d')
 
-
 def normalizar_columnas(df):
-    # 1. ESTANDARIZAR: Convertimos todas las columnas a minúsculas y quitamos espacios invisibles
-    df.columns = df.columns.astype(str).str.strip().str.lower()
-    
+    # 1. LIMPIEZA EXTREMA: Minúsculas, sin espacios, y SIN TILDES
+    cols_limpias = []
+    for col in df.columns:
+        c = str(col).strip().lower()
+        # Quita las tildes (técnico -> tecnico)
+        c = ''.join(c for c in unicodedata.normalize('NFD', c) if unicodedata.category(c) != 'Mn')
+        cols_limpias.append(c)
+        
+    df.columns = cols_limpias
+
+    # 2. DICCIONARIO DE NUEVOS NOMBRES (UN SOLO BUCLE)
     nuevos_nombres = {}
     for col in df.columns:
         if col == 'orden' or col == 'ot': 
@@ -176,13 +184,13 @@ def normalizar_columnas(df):
         elif col == 'contrato': 
             nuevos_nombres[col] = 'contrato'
             
-        # 2. REGLA DEL CLIENTE (Limpiada)
-        elif 'nombre' in col and not any(p in col for p in ['tecnic', 'técnic', 'inspector']): 
+        # REGLA DEL CLIENTE: (Como ya no hay tildes, solo buscamos 'tecnic')
+        elif 'nombre' in col and not any(p in col for p in ['tecnic', 'inspector']): 
             nuevos_nombres[col] = 'nombre'
             
-        elif 'direcc' in col or 'direcci' in col: 
+        elif 'direcc' in col: 
             nuevos_nombres[col] = 'direccion'
-        elif 'telefon' in col or 'teléfon' in col: 
+        elif 'telefon' in col: 
             nuevos_nombres[col] = 'telefono'
         elif 'fecha' in col and 'programac' in col: 
             nuevos_nombres[col] = 'fecha_programacion'
@@ -205,17 +213,16 @@ def normalizar_columnas(df):
         elif 'cabecera' in col: 
             nuevos_nombres[col] = 'municipio'
             
-        # 3. REGLAS DE TÉCNICOS/INSPECTORES
-        # Primero aseguramos el código del técnico para que no se cruce
-        elif 'codigo' in col and ('tecnic' in col or 'técnic' in col): 
+        # 3. REGLAS DE TÉCNICOS/INSPECTORES (A prueba de balas)
+        elif 'codigo' in col and 'tecnic' in col: 
             nuevos_nombres[col] = 'codigo_tecnico'
             
-        # Luego la regla general amplia para atrapar la columna del nombre del inspector
-        elif any(p in col for p in ['tecnic', 'técnic', 'inspector', 'encargado']): 
+        # Regla general para atrapar la columna del nombre del inspector
+        elif any(p in col for p in ['tecnic', 'inspector', 'encargado']): 
             nuevos_nombres[col] = 'inspector'
             
         # 4. REGLAS DE ESTADO
-        elif 'estado' in col and ('gestion' in col or 'gestión' in col): 
+        elif 'estado' in col and 'gestion' in col: 
             nuevos_nombres[col] = 'estado_ejecucion'
         elif col == 'estado' or col == 'estado visita' or col == 'estado de la orden': 
             nuevos_nombres[col] = 'estado_visita'
@@ -223,13 +230,8 @@ def normalizar_columnas(df):
     # Al final aplicas el renombramiento
     df.rename(columns=nuevos_nombres, inplace=True)
 
-    # Guarda una copia exacta de la estructura limpia en tu computadora
-    df.to_csv("molde_certiredes.csv", index=False)
-
     # Eliminar columnas duplicadas si las hay
-    return df.loc[:, ~df.columns.duplicated()]
-
-    
+    return df.loc[:, ~df.columns.duplicated()]  
 
 def procesar_nuevas_bases(archivos_subidos):
     """
