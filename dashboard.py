@@ -73,9 +73,9 @@ def verificar_seguridad():
 
     with col_form:
         # Textos alineados a la izquierda y sin márgenes para que no ocupen espacio innecesario
-        st.markdown("<h2 style='text-align: left; color: #2e3b4e; margin-bottom: 0px;'>Ingreso seguimiento y control Operativo</h2>", unsafe_allow_html=True)
-        st.markdown("<h4 style='text-align: left; color: #2e3b4e; margin-top: 0px;'>Certi-Redes S.A.S - Santiago de Cali</h4>", unsafe_allow_html=True)
-        st.markdown("<div style='text-align: left; font-size: 0.9rem; font-style: italic; color: #777; margin-bottom: 15px;'>*** CERTIFICAMOS TU TRANQUILIDAD ***</div>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #2e3b4e; margin-bottom: 0px;'>Ingreso seguimiento y control Operativo</h2>", unsafe_allow_html=True)
+        st.markdown("<h4 style='text-align: center; color: #2e3b4e; margin-top: 0px;'>Certi-Redes S.A.S - Santiago de Cali</h4>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center; font-size: 0.9rem; font-style: italic; color: #777; margin-bottom: 15px;'>*** CERTIFICAMOS TU TRANQUILIDAD ***</div>", unsafe_allow_html=True)
         
         usuario = st.text_input("Usuario")
         clave = st.text_input("Contraseña", type="password")
